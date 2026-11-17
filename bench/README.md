@@ -111,92 +111,205 @@ and SHA-256. Reports, each with the llama.cpp version it ran, go to
 
 The reuse task sets (`reuse-tasks-c++*.json`) ask about the C++ enforcement profile in
 https://github.com/chainofreasoning/sound-design: clone it beside this repository, or
-pass `--source <dir>`. The tests and their order are in "The tests, in order", below.
+pass `--source <dir>`. How to run each test, in order: "Running the tests", below.
 
-## The tests, in order
+## Running the tests
 
-These are the tests behind the records below. Run them in this order to measure a
-release; each step says what it needs. Commands run from the repository root.
+The tests behind the records below, step by step, from a fresh clone. Run them in this
+order. Every command runs from the root of this repository unless it says otherwise.
+Each test prints where it wrote its report: `~/.local/share/llama-bench/`, one file per
+model and test, named by time, model and test, with the llama.cpp version in it.
 
-**Before any test:**
+### 0. Set up, once
 
-- **Swift 6:** `bench/setup-swift.sh`.
-- **A CUDA build** of this repository in `build/` (`SQLITE-STORE.md`, "Build"). Its
-  llama-bench must have `--store`: `build/bin/llama-bench --help 2>&1 | grep -- --store`.
-- **The GPU to itself:** no other llama-server or GPU job running, except in test 1.
-- **Disk:** the models below (`bench/bench.swift list` gives sizes; `all` is about 200 GB)
-  and about 7 GB for the state store.
+**Get both repositories, side by side.** The `reuse` tests ask questions about the C++
+enforcement profile in sound-design and look for it beside this repository:
 
-| # | Test | Command | Needs |
-|---:|---|---|---|
-| 1 | `perf`: server speed | `bench/bench.swift perf <url> [<url>=64,2048 ...]` | Running llama-server instances. Limit an Intel iGPU to `=64,2048` |
-| 2 | `baseline`, `depth`: llama-bench speed | `bench/bench.swift run all depth`; `bench/bench.swift run all baseline` | The models: `bench/bench.swift fetch all` |
-| 3 | `reuse`: use 1, no store, cold, warm | `bench/bench.swift run qwen3.8-27b reuse`, then twice `bench/bench.swift run qwen3.8-27b reuse --store ~/.local/share/llm-reuse/c++.sqlite` | `fetch qwen3.8-27b`; sound-design cloned beside this repository; the store file new |
-| 4 | `reuse`: use 1, Test 1 (runs 1-6 below) | as below | Test 3's needs; `fetch gemma-4-31b` |
-| 5 | `state`: use 2 | `bench/bench.swift run gemma-4-31b state --store ~/.local/share/llm-reuse/depth.sqlite` | `fetch gemma-4-31b`; a 24 GB GPU (the error it tests depends on the card); the store file new |
-| 6 | The trace | `lldb -b -s llama-bench-oom-trace-v1.0.0.lldb -- ...` (below) | A RelWithDebInfo build; test 5's store file, for the runs with the store |
+```
+git clone --branch sqlite-store https://github.com/chainofreasoning/llama.cpp
+git clone https://github.com/chainofreasoning/sound-design
+cd llama.cpp
+```
 
-Test 2 on other backends: `--build <dir>` with another build of this repository (for
-example `build-vulkan/bin`), or, with the linux repository's install,
-`--accelerator cpu|intel` (add `--ub 128` for dense models on the Intel iGPU).
+**Install what the tests use.** Swift 6, through the script here; the rest from your
+distribution (Ubuntu 26.04 package names shown):
 
-**Test 4, Test 1's runs, in this order.** Each run depends on the one before: run 1
-decides which tasks qualify (a task qualifies when it is answered correctly and its peak
-context exceeds 32,768 in every pass; one that does not is replaced and run 1 repeated);
-run 2 builds the store for the final tasks; runs 3 and 4 put the failure and the
-baseline on record before the test; runs 5 and 6 use run 2's snapshots.
-[`reuse-store-benchmark.md`](reuse-store-benchmark.md) has the full rationale.
+```
+bench/setup-swift.sh                          # Swift 6, as you, if it is missing
+sudo apt install curl git sqlite3 lldb        # sqlite3: the reuse store; lldb: test 6
+```
+
+**Build with CUDA**, as in `SQLITE-STORE.md`, "Build", section 1. Set
+`CMAKE_CUDA_ARCHITECTURES` from `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`
+(12.0 → `120a-real`, 8.9 → `89-real`). Then check that its llama-bench has the store:
+
+```
+build/bin/llama-bench --help 2>&1 | grep -- --store
+```
+
+The tests use `build/bin` unless the linux repository's setup is installed
+(`/opt/llama.cpp/current/bin/llama-on` exists); then they use that install, and
+`--build build/bin` makes them use this build instead.
+
+**Fetch the models.** Each is pinned by Hugging Face revision and SHA-256 and goes to
+`~/.local/share/llama-models/`. The three the tests need:
+
+```
+bench/bench.swift fetch gpt-oss-20b           # 12.1 GB: test 1
+bench/bench.swift fetch qwen3.8-27b           # 17.5 GB: tests 3, 4
+bench/bench.swift fetch gemma-4-31b           # 18.9 GB: tests 4, 5, 6
+```
+
+`bench/bench.swift list` shows every declared model, its size and whether it is present.
+Test 2 measures every model that is present; `bench/bench.swift fetch all` gets them all
+(about 200 GB).
+
+**Give the GPU to the tests.** The tests (all but test 1) start their own llama-server or
+llama-bench and refuse while another process holds the NVIDIA GPU. Stop any llama-server
+you run yourself before them.
+
+### 1. `perf`: a running server's speed
+
+Start a server in one terminal (gpt-oss-20b, two slots of 64k tokens, as measured here):
+
+```
+build/bin/llama-server -m ~/.local/share/llama-models/gpt-oss-20b-MXFP4.gguf \
+  --n-gpu-layers all --flash-attn on --ctx-size 131072 --parallel 2 --port 8080
+```
+
+In another, once it answers on `http://127.0.0.1:8080/health`:
+
+```
+bench/bench.swift perf http://127.0.0.1:8080
+```
+
+It sends single requests of about 64, 2k and 16k prompt tokens, then two at once (the
+two slots). Give it several URLs to measure several servers and two at once across them.
+A server on an Intel iGPU must stop at 2k: `http://127.0.0.1:8081=64,2048`. A longer
+prefill outlasts the i915 driver's preempt timeout and the GPU is reset. Stop the server
+(Ctrl-C) before test 2.
+
+### 2. `baseline` and `depth`: llama-bench speed
+
+```
+bench/bench.swift run all baseline            # pp512 and tg128 at empty context
+bench/bench.swift run all depth               # the same at 0, 8k, 32k and 64k tokens of context
+```
+
+`all` means every model present; a model name runs one. Models larger than the GPU are
+run with expert weights in system RAM. On another backend: `--build <dir>` with another
+build of this repository, for example `--build build-vulkan/bin`.
+
+### 3. `reuse`: use 1, the first run
+
+Thirteen questions about the C++ profile, answered by Qwen3.8-27B through tools, three
+times: no store, a new store (cold: it fills), the same store again (warm):
+
+```
+bench/bench.swift run qwen3.8-27b reuse
+bench/bench.swift run qwen3.8-27b reuse --store ~/.local/share/llm-reuse/c++.sqlite
+bench/bench.swift run qwen3.8-27b reuse --store ~/.local/share/llm-reuse/c++.sqlite
+```
+
+The store file must not exist before the second command. Each report gives, per task,
+the answer and whether it is correct, the peak context, the prompt tokens sent and
+computed, the time, and what came from the store.
+
+### 4. `reuse`: Test 1, use 1 against a full context
+
+Six runs, in this order. Each depends on the one before:
+
+1. **Calibration** decides which tasks count: a task qualifies when it is answered
+   correctly and its peak context exceeds 32,768 tokens in every pass (the report's
+   "Peak > 32,768" column). A task that does not qualify is replaced in
+   `bench/reuse-tasks-c++-c.json` and run 1 repeated.
+2. **The store** is built for the final tasks, then copied twice (`sqlite3 .backup`), so
+   runs 5 and 6 each start from the same store.
+3. and 4. put the failure and the baseline on record before the test.
+5. and 6. are the test, on Gemma 4 31B and on Qwen3.8-27B.
 
 ```
 # 1. Calibration
 bench/bench.swift run qwen3.8-27b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --ctx 65536 --repeat 3
 
-# 2. Build the store, then snapshot it for runs 5 and 6
+# 2. Build the store, then copy it for runs 5 and 6
 bench/bench.swift run qwen3.8-27b reuse --store ~/.local/share/llm-reuse/c++-oom.sqlite
 bench/bench.swift run qwen3.8-27b reuse --tasks bench/reuse-tasks-c++-b.json --store ~/.local/share/llm-reuse/c++-oom.sqlite
 bench/bench.swift run qwen3.8-27b reuse --tasks bench/reuse-tasks-c++-c.json --role build --store ~/.local/share/llm-reuse/c++-oom.sqlite
 sqlite3 ~/.local/share/llm-reuse/c++-oom.sqlite ".backup $HOME/.local/share/llm-reuse/c++-oom-gemma.sqlite"
 sqlite3 ~/.local/share/llm-reuse/c++-oom.sqlite ".backup $HOME/.local/share/llm-reuse/c++-oom-qwen.sqlite"
 
-# 3. The original failure
+# 3. The original failure: Gemma at a 65,536-token context, no store
 bench/bench.swift run gemma-4-31b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --ctx 65536
 
-# 4. Baseline at the limit (default context 32768)
+# 4. Baseline at the default context (32,768), no store
 bench/bench.swift run gemma-4-31b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --repeat 3
 
-# 5. The test
+# 5. The test: Gemma with the store
 bench/bench.swift run gemma-4-31b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --repeat 3 --store ~/.local/share/llm-reuse/c++-oom-gemma.sqlite
 
-# 6. Same model with the store
+# 6. Qwen with the store
 bench/bench.swift run qwen3.8-27b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --repeat 3 --store ~/.local/share/llm-reuse/c++-oom-qwen.sqlite
 ```
 
-The snapshots need the `sqlite3` command-line shell.
+[`reuse-store-benchmark.md`](reuse-store-benchmark.md) has the full rationale and the
+v0.9.0 results.
 
-**Test 6, the trace.** Build with debug symbols for host code, then run the trace four
-times, once per configuration of test 5:
+### 5. `state`: use 2, the KV-cache store against an out-of-memory error
+
+```
+bench/bench.swift run gemma-4-31b state --store ~/.local/share/llm-reuse/depth.sqlite
+```
+
+Five llama-bench runs of Gemma 4 31B at a 65,280-token depth (a 65,536-token context):
+
+| Run | Store | CUDA graphs | Expected on a 24 GB GPU |
+|---|---|---|---|
+| run 1 | no | on | out of memory, computing the depth |
+| fill | saves it (micro-batch 256, which fits) | on | finishes |
+| run 2 | restores it | on | out of memory, building a CUDA graph |
+| run 3 | no | off | out of memory, computing the depth (the control) |
+| run 4 | restores it | off | finishes |
+
+The store file must not exist before; it grows to about 6.2 GB. The error it tests
+depends on the GPU's memory: if run 1 does not run out of memory, the test stops there
+and says so. On a card with a different amount of memory, `--depth <tokens>` sets another
+depth. The report gives each run's result, its command, and the store's own lines;
+each run's full output is in a `.log` beside it.
+
+### 6. The trace: where the memory goes
+
+Build llama-bench again with debug symbols for host code (GPU code is unchanged), using
+your `CMAKE_CUDA_ARCHITECTURES`:
 
 ```
 cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=ON \
-  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=<arch> -DGGML_VULKAN=OFF \
+  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120a-real -DGGML_VULKAN=OFF \
   -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_OPENSSL=OFF \
   -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF
 cmake --build build-debug --parallel --target llama-bench
+```
+
+Then run test 5's four configurations under lldb, from `bench/`, where the script is,
+using test 5's store:
+
+```
 cd bench
 lldb -b -s llama-bench-oom-trace-v1.0.0.lldb -- ../build-debug/bin/llama-bench \
   -m ~/.local/share/llama-models/gemma-4-31B_q4_0-it.gguf -fa on -r 3 -o md -p 0 -n 128 -d 65280 \
   --store ~/.local/share/llm-reuse/depth.sqlite
 ```
 
-| Run | Store | CUDA graphs | Change to the command or script |
+| Run | Store | CUDA graphs | Change |
 |---|---|---|---|
-| 1 | no | on | leave out `--store` |
-| 2 | yes | on | as above |
-| 3 | no | off | leave out `--store`; add `settings set target.env-vars GGML_CUDA_DISABLE_GRAPHS=1` before `run` in the script |
+| 1 | no | on | leave out the `--store` line |
+| 2 | yes | on | none |
+| 3 | no | off | leave out `--store`, and add `settings set target.env-vars GGML_CUDA_DISABLE_GRAPHS=1` before `run` in the script |
 | 4 | yes | off | add the same setting |
 
-Each run prints the free GPU memory at every breakpoint. Compare with the step tables
-in [`llama-bench-oom-reuse-sqlite.md`](llama-bench-oom-reuse-sqlite.md).
+At every breakpoint lldb prints where it is and the free GPU memory in MiB. Compare the
+sequence with the step tables in
+[`llama-bench-oom-reuse-sqlite.md`](llama-bench-oom-reuse-sqlite.md), "Results".
 
 ## The records
 

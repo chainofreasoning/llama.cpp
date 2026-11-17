@@ -1969,6 +1969,10 @@ func spawnLogged(_ argv: [String], to file: String) -> Int32 {
 
 func runStateStore(_ model: Model, kv: String?, reps: Int, base: String, started: Date, facts: [(String, String)]) -> (String, Bool) {
     guard let store = storePath else { fatal("the state suite needs --store <sqlite>: the file that holds the depth state.") }
+    // SQLite creates the file, not its directory
+    do { try FileManager.default.createDirectory(atPath: (store as NSString).deletingLastPathComponent, withIntermediateDirectories: true) } catch {
+        fatal("cannot create the directory for \(store): \(error)")
+    }
     let help = query(["sh", "-c", "exec \"$@\" --help 2>&1", "sh"] + onAccelerator("llama-bench")).output
     guard help.contains("--store") else {
         fatal("this llama-bench has no --store: build this repository (SQLITE-STORE.md), and pass --build <dir>.")
