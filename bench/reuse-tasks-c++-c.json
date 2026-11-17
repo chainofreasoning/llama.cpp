@@ -1,0 +1,136 @@
+{
+  "name": "C++ profile: reuse-store tasks, set C (work that exceeds the context)",
+  "about": "Test 1, case 3: does reuse positively impact the out-of-memory scenario? Measured tasks are cross-file audits: a complete answer needs most of two or three of the profile's largest files at once (the design enforcement spec, the persona, edict-check.cpp, about 12-17k tokens each), so that without the store each should need more than 32,768 tokens of context. That is checked, not assumed: calibration on Qwen3.8-27B at 64k qualifies a task only if its peak context exceeds 32,768 and its answer is correct in every pass, and tasks that don't qualify are replaced. Calibration (Qwen3.8-27B at 64k, 2026-11-13) measured each task's peak once; the runs are deterministic (temperature 0, seed 1; repeated passes were identical token for token). Three tasks exceed 32,768 and are the measured tasks: review-residue-audit (55,688), edict-report-pipeline (35,325), workflow-to-container (35,262). The six that fit within 32k are kept with role \"fits\" and their peaks for the record; --role measured leaves them out. Version 1's nine tasks all fit (4,853-26,448): a model reads selectively by grep. Build tasks are different questions over the same files; they fill the store and are never the measured questions. Tags give each measured task's overlap with the build tasks: same-section, same-file, new-file. Scoring: every group in expect must be matched by one of its alternatives (substring; case-insensitive unless caseSensitive). The measured task is all-audits: one work session doing all nine audits. On 2026-11-13, Gemma 4 31B through llama-server at a 65,536-token context filled the context with this task and stopped without an answer, after 840 s; it did not run out of GPU memory. llama-server reserves 386 MiB less GPU memory at startup than llama-bench at the same context (it reserves output for one token, llama-bench for up to 512), so this task cannot reproduce llama-bench's out-of-memory error at 65,536. llama-bench's error at that context comes on its first batch, before any depth is processed: see llama-bench-oom-gemma-4-31b.md and llama-bench-oom-reuse-sqlite.md.",
+  "source": [
+    "../programming/c++",
+    "../../../../sound-design/enforcement/languages/programming/c++",
+    "../../sound-design/enforcement/languages/programming/c++"
+  ],
+  "sourceNote": "Candidates relative to this file, first existing wins: the first for the copy in sound-design's enforcement/languages/bechmarking, the second for the copy in linux's ubuntu/26.04/05-llm-local, the third for the copy in the llama.cpp fork's bench/ (each with sound-design cloned beside it). --source overrides.",
+  "authoredAgainst": "sound-design 3045e83",
+  "tasks": [
+    {
+      "id": "all-audits",
+      "role": "measured",
+      "tag": "same-section",
+      "question": "Do these 9 audits of the C++ profile in this one session, answering each in full under its own numbered heading.\n\n1. Section 12 of the C++ design enforcement spec says the properties it once held as review-only (CQS naming semantics, the -ed/-ing suffix discipline, referential transparency, dynamic polymorphism) are now enforced statically. Audit the whole C++ profile for every place that still describes any of them as review-only, untooled or caught only in code review: name each file and section, quote the stale claim, and say which banned-construct query now enforces it. Cover the spec itself (including its section 4.1 rows and section 6), the persona, the coding-standards reasoning, and the agent projections.\n\n2. In the C++ spec's section 4.4 edict binding, which edicts are bound with a liability and no mechanism at all? Quote each one's liability. Then explain from environment/edict-check.cpp how an edict's standing is derived from its mechanism outcomes, what standing an edict gets when none of its mechanisms ran, and how a compliance declaration's liability and vacuous lines enter the report. Name the edict the example declaration in examples/ declares vacuous.\n\n3. List every design-review mechanism in the C++ spec's section 4.4 edict binding: the edict, the role it names, and its reason. Group them by role. Then, for each of those roles, give its mandate and its entry and exit guards from the persona's role table, the steps of its tool procedure from the persona, and what the Claude Code projection says the role takes and returns.\n\n4. Explain the C++ steward's Refactorer contract end to end: its mandate, its entry and exit guards and why the exit guard is the one that bites, the grants it needs, every step of its tool procedure and the gate commands those steps run (exact commands from the spec's verification gate), and each of the three invocations in 'The Contract, Verified Standalone' with its subject, verifications, outcome, the guard that decided it and the tool output that decided it. Then list every outcome the Claude Code projection allows an invocation to return and what each means.\n\n5. Explain how environment/edict-check.cpp produces the edict report, end to end: its subcommands, every error it can return, how it reads the binding from the spec and the recommended set (and where it finds the convention file), how it decides which flags and clang-tidy checks refuse, how it attributes compiler and linter diagnostics to edicts, how it runs the sweep queries, every mechanism outcome and every standing and how a standing is derived. Then relate each step to the Enforcer's procedure steps 4 to 9 in the persona.\n\n6. How does the C++ profile account for its test catalogue? Give how many skeletons there are and how many are unwired, what provision's test stage prints and why it needs --unwired-ok, the six tiers and which one this profile leaves Absent, the build stages disciplines run at and which stage has no specified command, which canon property in the spec's section 4.1 is Absent because the skeletons are unwired and its edict, and how section 4.4 says runtime mechanisms such as ThreadSanitizer reach edicts that have no binding entry.\n\n7. List every canon property the C++ spec's section 4.1 marks Absent and every one it marks Native, each with its edicts. Then compare the Absent rows against the section 4.4 edict binding: which Absent row's edict nonetheless has mechanisms in the binding, which edict the binding holds with a liability and no mechanism although its section 4.1 row is not marked Absent, and which Absent row's edict has no binding entry at all, and how section 4.4 says such an edict is reached.\n\n8. Trace a C++ source from the gate to a shipped binary under the C++ profile: each build variant of the development workflow with its exact command and purpose, why the instrumented variant has two commands, how test builds differ (the RapidCheck flag), what the container pins (base image, clang version, mutation tool and version, property-testing library commit), every provision stage and what it proves, what edict-check verify-binding does in the container build, and which test stage has no command and why.\n\n9. Trace every naming decision in the C++ profile from its coding-standards reasoning to its enforcement: the camps the reasoning surveyed, the LLVM variable anomaly and what LLVM does instead, what Swift contributes (semantic mutation naming), what TypeScript and Python contribute, the resulting LLVM + Swift synthesis; then the spec's section 5 rules (types, functions, variables, members, constants, enumerations, namespaces, files, booleans, acronyms) with the .clang-tidy option value that enforces each where one does, and how the -ed/-ing suffix rule is enforced now.",
+      "expect": [["A7"], ["§6", "section 6", "Semantic Mutation"], ["What Cannot Be Automated"], ["Refusal Discipline"], ["portability-notes", "portability notes"], ["Q8"], ["Q9"], ["Q10"], ["E13"], ["E20"], ["E28"], ["E29"], ["E30"], ["E31"], ["E33"], ["E66"], ["liability"], ["E62"], ["E10"], ["E23"], ["E25"], ["E38"], ["E41"], ["E11"], ["E15"], ["E19"], ["E27"], ["E32"], ["E34"], ["E35"], ["modernize-use-designated-initializers"], ["Completed"], ["entry guard"], ["exit guard"], ["ThrowViolation"], ["exceptions disabled"], ["Failed"], ["Abandoned"], ["BindingBroken"], ["MissingBinding"], ["check-markup"], ["SD_CONVENTION"], ["WarningsAsErrors"], ["not-run", "NotRun"], ["violated"], ["vacuous"], ["64"], ["66"], ["unwired-ok"], ["Observation"], ["pre-production"], ["A24"], ["E39"], ["T-27"], ["A5"], ["A7"], ["A17"], ["A18"], ["A20"], ["A24"], ["A27"], ["A25"], ["E15"], ["E20"], ["E39"], ["discipline"], ["fedora:43", "fedora 43"], ["21.1.8"], ["0.35.0"], ["2c3c4365"], ["do not compose", "cannot be combined", "can't be combined", "separate builds"], ["RC_DONT_USE_RTTI"], ["query-proof"], ["verify-binding"], ["pre-production"], ["PascalCase"], ["Swift"], ["camelBack"], ["lower_case"], ["Q8"], ["acronym"]],
+      "calibrationPeak": 255215
+    },
+    {
+      "id": "review-residue-audit",
+      "role": "part",
+      "tag": "same-file",
+      "question": "Section 12 of the C++ design enforcement spec says the properties it once held as review-only (CQS naming semantics, the -ed/-ing suffix discipline, referential transparency, dynamic polymorphism) are now enforced statically. Audit the whole C++ profile for every place that still describes any of them as review-only, untooled or caught only in code review: name each file and section, quote the stale claim, and say which banned-construct query now enforces it. Cover the spec itself (including its section 4.1 rows and section 6), the persona, the coding-standards reasoning, and the agent projections.",
+      "expect": [["A7"], ["§6", "section 6", "Semantic Mutation"], ["What Cannot Be Automated"], ["Refusal Discipline"], ["portability-notes", "portability notes"], ["Q8"], ["Q9"], ["Q10"]],
+      "calibrationPeak": 55688
+    },
+    {
+      "id": "liability-only-edicts",
+      "role": "fits",
+      "tag": "same-section",
+      "question": "In the C++ spec's section 4.4 edict binding, which edicts are bound with a liability and no mechanism at all? Quote each one's liability. Then explain from environment/edict-check.cpp how an edict's standing is derived from its mechanism outcomes, what standing an edict gets when none of its mechanisms ran, and how a compliance declaration's liability and vacuous lines enter the report. Name the edict the example declaration in examples/ declares vacuous.",
+      "expect": [["E13"], ["E20"], ["E28"], ["E29"], ["E30"], ["E31"], ["E33"], ["E66"], ["liability"], ["E62"]],
+      "calibrationPeak": 19726
+    },
+    {
+      "id": "review-roles-in-binding",
+      "role": "fits",
+      "tag": "same-section",
+      "question": "List every design-review mechanism in the C++ spec's section 4.4 edict binding: the edict, the role it names, and its reason. Group them by role. Then, for each of those roles, give its mandate and its entry and exit guards from the persona's role table, the steps of its tool procedure from the persona, and what the Claude Code projection says the role takes and returns.",
+      "expect": [["E10"], ["E23"], ["E25"], ["E38"], ["E41"], ["E11"], ["E15"], ["E19"], ["E27"], ["E32"], ["E34"], ["E35"]],
+      "calibrationPeak": 19633
+    },
+    {
+      "id": "refactorer-contract",
+      "role": "fits",
+      "tag": "same-file",
+      "question": "Explain the C++ steward's Refactorer contract end to end: its mandate, its entry and exit guards and why the exit guard is the one that bites, the grants it needs, every step of its tool procedure and the gate commands those steps run (exact commands from the spec's verification gate), and each of the three invocations in 'The Contract, Verified Standalone' with its subject, verifications, outcome, the guard that decided it and the tool output that decided it. Then list every outcome the Claude Code projection allows an invocation to return and what each means.",
+      "expect": [["modernize-use-designated-initializers"], ["Completed"], ["entry guard"], ["exit guard"], ["ThrowViolation"], ["exceptions disabled"], ["Failed"], ["Abandoned"]],
+      "calibrationPeak": 25706
+    },
+    {
+      "id": "edict-report-pipeline",
+      "role": "part",
+      "tag": "same-section",
+      "question": "Explain how environment/edict-check.cpp produces the edict report, end to end: its subcommands, every error it can return, how it reads the binding from the spec and the recommended set (and where it finds the convention file), how it decides which flags and clang-tidy checks refuse, how it attributes compiler and linter diagnostics to edicts, how it runs the sweep queries, every mechanism outcome and every standing and how a standing is derived. Then relate each step to the Enforcer's procedure steps 4 to 9 in the persona.",
+      "expect": [["BindingBroken"], ["MissingBinding"], ["check-markup"], ["SD_CONVENTION"], ["WarningsAsErrors"], ["not-run", "NotRun"], ["violated"], ["vacuous"]],
+      "calibrationPeak": 35325
+    },
+    {
+      "id": "test-catalogue-accounting",
+      "role": "fits",
+      "tag": "same-section",
+      "question": "How does the C++ profile account for its test catalogue? Give how many skeletons there are and how many are unwired, what provision's test stage prints and why it needs --unwired-ok, the six tiers and which one this profile leaves Absent, the build stages disciplines run at and which stage has no specified command, which canon property in the spec's section 4.1 is Absent because the skeletons are unwired and its edict, and how section 4.4 says runtime mechanisms such as ThreadSanitizer reach edicts that have no binding entry.",
+      "expect": [["64"], ["66"], ["unwired-ok"], ["Observation"], ["pre-production"], ["A24"], ["E39"], ["T-27"]],
+      "calibrationPeak": 18680
+    },
+    {
+      "id": "canon-vs-binding",
+      "role": "fits",
+      "tag": "same-section",
+      "question": "List every canon property the C++ spec's section 4.1 marks Absent and every one it marks Native, each with its edicts. Then compare the Absent rows against the section 4.4 edict binding: which Absent row's edict nonetheless has mechanisms in the binding, which edict the binding holds with a liability and no mechanism although its section 4.1 row is not marked Absent, and which Absent row's edict has no binding entry at all, and how section 4.4 says such an edict is reached.",
+      "expect": [["A5"], ["A7"], ["A17"], ["A18"], ["A20"], ["A24"], ["A27"], ["A25"], ["E15"], ["E20"], ["E39"], ["discipline"]],
+      "calibrationPeak": 16810
+    },
+    {
+      "id": "workflow-to-container",
+      "role": "part",
+      "tag": "same-section",
+      "question": "Trace a C++ source from the gate to a shipped binary under the C++ profile: each build variant of the development workflow with its exact command and purpose, why the instrumented variant has two commands, how test builds differ (the RapidCheck flag), what the container pins (base image, clang version, mutation tool and version, property-testing library commit), every provision stage and what it proves, what edict-check verify-binding does in the container build, and which test stage has no command and why.",
+      "expect": [["fedora:43", "fedora 43"], ["21.1.8"], ["0.35.0"], ["2c3c4365"], ["do not compose", "cannot be combined", "can't be combined", "separate builds"], ["RC_DONT_USE_RTTI"], ["query-proof"], ["verify-binding"], ["pre-production"]],
+      "calibrationPeak": 35262
+    },
+    {
+      "id": "naming-trace",
+      "role": "fits",
+      "tag": "new-file",
+      "question": "Trace every naming decision in the C++ profile from its coding-standards reasoning to its enforcement: the camps the reasoning surveyed, the LLVM variable anomaly and what LLVM does instead, what Swift contributes (semantic mutation naming), what TypeScript and Python contribute, the resulting LLVM + Swift synthesis; then the spec's section 5 rules (types, functions, variables, members, constants, enumerations, namespaces, files, booleans, acronyms) with the .clang-tidy option value that enforces each where one does, and how the -ed/-ing suffix rule is enforced now.",
+      "expect": [["PascalCase"], ["Swift"], ["camelBack"], ["lower_case"], ["Q8"], ["acronym"]],
+      "calibrationPeak": 28385
+    },
+    {
+      "id": "build-binding",
+      "role": "build",
+      "tag": "",
+      "question": "Summarize the C++ design enforcement spec's section 4.4 edict binding: for every edict, its mechanisms (compiler flags, clang-tidy checks, banned-construct queries, design reviews with their roles) and any liability it declares, plus how runtime mechanisms and unbound edicts are reached and the table of checks version 2 bound.",
+      "expect": [["E26"], ["E15"]]
+    },
+    {
+      "id": "build-canon-groups",
+      "role": "build",
+      "tag": "",
+      "question": "Summarize the C++ design enforcement spec's sections 4.1 to 4.3 and 12: every canon property row with its edicts and its code (Native, Partial, Absent), groups B and C, and the declared liabilities table with what enforces each property now and what is to be added.",
+      "expect": [["A24"], ["Q10"]]
+    },
+    {
+      "id": "build-persona-roles",
+      "role": "build",
+      "tag": "",
+      "question": "Summarize the C++ steward persona's eleven roles and their procedures: each role's mandate and entry and exit guards, the capability table, the shared invocations, the banned-construct sweep, every role's tool procedure steps, the refusal discipline, and the three verified Refactorer invocations.",
+      "expect": [["Detective"], ["Refactorer"]]
+    },
+    {
+      "id": "build-edict-check",
+      "role": "build",
+      "tag": "",
+      "question": "Summarize environment/edict-check.cpp: its subcommands, its error enum, the markup it parses, how it reads the binding, the declaration and the recommended set, how it attributes diagnostics and runs sweep queries, its outcomes and standings and how standing is derived, and what verify-binding checks.",
+      "expect": [["verify-binding"], ["standing"]]
+    },
+    {
+      "id": "build-workflow",
+      "role": "build",
+      "tag": "",
+      "question": "Summarize the C++ development workflow and the testing catalogue: every build variant and its command, test builds, the edict check, run, debug, package, deploy and pin sections of development-workflow.md, and testing/README.md's tiers, stages, verified state and skeleton counts.",
+      "expect": [["Instrumented"], ["tier"]]
+    },
+    {
+      "id": "build-environment",
+      "role": "build",
+      "tag": "",
+      "question": "Summarize the C++ steward's environment: what the Containerfile installs and pins, the provision stages, and edict-check's subcommands and what verify-binding refuses.",
+      "expect": [["verify-binding"], ["gate-proof"]]
+    }
+  ],
+  "version": 2
+}

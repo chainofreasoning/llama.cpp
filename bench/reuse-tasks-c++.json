@@ -1,0 +1,203 @@
+{
+  "name": "C++ profile: reuse-store tasks",
+  "about": "Questions about the sound-design C++ enforcement profile, each with a checkable answer. Several tasks draw on the same large files (the design enforcement spec, the persona, the examples and environment READMEs), so a warm reuse store has something to reuse. Scoring: every group in expect must be matched by at least one of its alternatives (substring; case-insensitive unless caseSensitive).",
+  "source": [
+    "../programming/c++",
+    "../../../../sound-design/enforcement/languages/programming/c++",
+    "../../sound-design/enforcement/languages/programming/c++"
+  ],
+  "sourceNote": "Candidates relative to this file, first existing wins: the first for the copy in sound-design's enforcement/languages/bechmarking, the second for the copy in linux's ubuntu/26.04/05-llm-local, the third for the copy in the llama.cpp fork's bench/ (each with sound-design cloned beside it). --source overrides.",
+  "authoredAgainst": "sound-design bed52dc",
+  "tasks": [
+    {
+      "id": "gate-flags",
+      "question": "Which C++ language standard does the C++ profile's gate compile against, and which two compiler flags remove exceptions and run-time type information?",
+      "expect": [
+        [
+          "c++23"
+        ],
+        [
+          "fno-exceptions"
+        ],
+        [
+          "fno-rtti"
+        ]
+      ]
+    },
+    {
+      "id": "verified-base",
+      "question": "Which base image and which clang version is the C++ steward container verified against?",
+      "expect": [
+        [
+          "fedora:43",
+          "fedora 43"
+        ],
+        [
+          "21.1.8"
+        ]
+      ]
+    },
+    {
+      "id": "lint-layer-example",
+      "question": "Which example file in the C++ profile passes the compiler but is refused by the linter because of a naming rule, and which clang-tidy check refuses it?",
+      "expect": [
+        [
+          "NamingViolation"
+        ],
+        [
+          "readability-identifier-naming"
+        ]
+      ]
+    },
+    {
+      "id": "naming-cases",
+      "question": "Under the C++ profile's naming conventions, what case do type names, function names and namespace names use? Use the profile's own terms.",
+      "expect": [
+        [
+          "PascalCase",
+          "CamelCase"
+        ],
+        [
+          "camelCase",
+          "camelBack"
+        ],
+        [
+          "lower_case",
+          "lowercase"
+        ]
+      ],
+      "caseSensitive": true
+    },
+    {
+      "id": "banned-queries",
+      "question": "How many banned-construct queries does the C++ profile's query sweep run, and which example file demonstrates the query that refuses a method whose name says it returns a new value (for example sorted()) while it mutates in place?",
+      "expect": [
+        [
+          "10",
+          "ten"
+        ],
+        [
+          "MutatingNameViolation"
+        ]
+      ]
+    },
+    {
+      "id": "edict-check",
+      "question": "What are the two subcommands of the C++ profile's edict-check program, and which of them does the container build run?",
+      "expect": [
+        [
+          "verify-binding"
+        ],
+        [
+          "report"
+        ]
+      ]
+    },
+    {
+      "id": "provision-stages",
+      "question": "Which provision stages does the C++ steward's container build run, in order, and with what option does the test stage run?",
+      "expect": [
+        [
+          "gate-proof"
+        ],
+        [
+          "query-proof"
+        ],
+        [
+          "unwired-ok",
+          "unwired"
+        ]
+      ]
+    },
+    {
+      "id": "format-string-ascii",
+      "question": "Why does the C++ profile say to keep format strings ASCII? Name the clang-tidy check involved and what happened.",
+      "expect": [
+        [
+          "modernize-use-std-print"
+        ],
+        [
+          "SIGSEGV",
+          "crash",
+          "139"
+        ]
+      ]
+    },
+    {
+      "id": "two-layer-defense",
+      "question": "For which principles does the C++ profile enforce with both a compiler flag and a clang-tidy check? Name the compiler flag for each.",
+      "expect": [
+        [
+          "fno-exceptions"
+        ],
+        [
+          "unused-result"
+        ]
+      ]
+    },
+    {
+      "id": "build-variants",
+      "question": "Which build variants does the C++ development workflow define, and why are the address and thread sanitizers separate builds?",
+      "expect": [
+        [
+          "Development"
+        ],
+        [
+          "Instrumented"
+        ],
+        [
+          "Release"
+        ],
+        [
+          "cannot be combined",
+          "can't be combined",
+          "not be combined",
+          "incompatible",
+          "mutually exclusive",
+          "cannot run together"
+        ]
+      ]
+    },
+    {
+      "id": "qa-engineer",
+      "question": "Which role in the C++ steward persona generates tests without permission to change any source, and what does it return for each property it could not cover with a test?",
+      "expect": [
+        [
+          "QA Engineer"
+        ],
+        [
+          "liabilit"
+        ]
+      ]
+    },
+    {
+      "id": "ownership",
+      "question": "What is the C++ profile's default smart pointer for unique ownership, and what kind of pointer does its smart pointer policy forbid?",
+      "expect": [
+        [
+          "unique_ptr"
+        ],
+        [
+          "raw owning",
+          "owning raw",
+          "new Resource"
+        ]
+      ]
+    },
+    {
+      "id": "macros",
+      "question": "Which macros does the C++ profile allow, and which clang-tidy check enforces the restriction?",
+      "expect": [
+        [
+          "SD_ASSERT"
+        ],
+        [
+          "include guard"
+        ],
+        [
+          "cppcoreguidelines-macro-usage"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,205 @@
+{
+  "name": "C++ profile: reuse-store tasks, set B",
+  "about": "Thirteen new questions about the sound-design C++ enforcement profile, none answered by set A (reuse-tasks-c++.json). Set B, with set A, builds the store for Test 1 (what reuse buys, including whether it prevents the out-of-memory failure): different questions over the same files as Test 1's measured tasks. Run against set A's store, it also shows the overlap gradient on small tasks. Every task carries an overlap tag saying how its answer relates to what set A's tasks read: same-section (the answer sits in a table or section an A task needed), same-file (a different section of a file an A task read), new-file (a file no A task needed). Scoring is as in set A: every group in expect must be matched by one of its alternatives (substring; case-insensitive unless caseSensitive).",
+  "source": [
+    "../programming/c++",
+    "../../../../sound-design/enforcement/languages/programming/c++",
+    "../../sound-design/enforcement/languages/programming/c++"
+  ],
+  "sourceNote": "Candidates relative to this file, first existing wins: the first for the copy in sound-design's enforcement/languages/bechmarking, the second for the copy in linux's ubuntu/26.04/05-llm-local, the third for the copy in the llama.cpp fork's bench/ (each with sound-design cloned beside it). --source overrides.",
+  "authoredAgainst": "sound-design c9506d8",
+  "tasks": [
+    {
+      "id": "nonallocating-flag",
+      "tag": "same-section",
+      "question": "Which compiler flag in the C++ profile's gate makes a hidden allocation inside a [[clang::nonallocating]] function a hard error, and which example file demonstrates it?",
+      "expect": [
+        [
+          "function-effects"
+        ],
+        [
+          "AllocationViolation"
+        ]
+      ]
+    },
+    {
+      "id": "iostream-example",
+      "tag": "same-section",
+      "question": "Which example file in the C++ profile is refused by clang-tidy for including <iostream>, and which clang-tidy check refuses it?",
+      "expect": [
+        [
+          "IostreamViolation"
+        ],
+        [
+          "portability-restrict-system-includes"
+        ]
+      ]
+    },
+    {
+      "id": "boundary-exemption",
+      "tag": "same-section",
+      "question": "Which banned-construct query does BoundaryExample.cpp show being exempted, and what declaration on the class exempts it?",
+      "expect": [
+        [
+          "Q7"
+        ],
+        [
+          "sd::boundary",
+          "clang::annotate"
+        ]
+      ]
+    },
+    {
+      "id": "move-safety",
+      "tag": "same-section",
+      "question": "Which clang-tidy checks enforce move safety in the C++ profile?",
+      "expect": [
+        [
+          "bugprone-use-after-move"
+        ],
+        [
+          "performance-move-const-arg"
+        ]
+      ]
+    },
+    {
+      "id": "release-variant",
+      "tag": "same-section",
+      "question": "In the C++ development workflow, what optimization level and which preprocessor definition does the Release build variant use, and which later stage consumes its output?",
+      "expect": [
+        [
+          "-O2",
+          "O2"
+        ],
+        [
+          "NDEBUG"
+        ],
+        [
+          "Package"
+        ]
+      ]
+    },
+    {
+      "id": "detective-role",
+      "tag": "same-section",
+      "question": "Which role in the C++ steward persona answers an open question when there is no reproducible failing artifact, and what must its finding carry?",
+      "expect": [
+        [
+          "Detective"
+        ],
+        [
+          "evidentiary class",
+          "evidentiary"
+        ]
+      ]
+    },
+    {
+      "id": "mutation-tool",
+      "tag": "same-file",
+      "question": "Which mutation-testing tool and which version does the C++ steward container install, and how is its download verified?",
+      "expect": [
+        [
+          "mull"
+        ],
+        [
+          "0.35.0"
+        ],
+        [
+          "sha256",
+          "sha-256",
+          "digest",
+          "checksum"
+        ]
+      ]
+    },
+    {
+      "id": "command-query",
+      "tag": "same-file",
+      "question": "Under the C++ profile's semantic mutation convention, what does a command return, and what naming marks a transformation that returns a new value?",
+      "expect": [
+        [
+          "void"
+        ],
+        [
+          "-ed",
+          "ed suffix",
+          "-ing",
+          "ing suffix"
+        ]
+      ]
+    },
+    {
+      "id": "const-policy",
+      "tag": "same-file",
+      "question": "Which clang-tidy check makes const the default in the C++ profile, and which const placement style do the profile's examples use?",
+      "expect": [
+        [
+          "misc-const-correctness"
+        ],
+        [
+          "East const",
+          "east-const"
+        ]
+      ]
+    },
+    {
+      "id": "error-enum",
+      "tag": "same-file",
+      "question": "In the C++ profile's error enum design, what underlying type does the example error enum use, and which function provides the error messages?",
+      "expect": [
+        [
+          "uint8_t"
+        ],
+        [
+          "toString"
+        ]
+      ]
+    },
+    {
+      "id": "format-style",
+      "tag": "new-file",
+      "question": "Which base style is the C++ profile's clang-format configuration based on, and what column limit does it enforce?",
+      "expect": [
+        [
+          "LLVM"
+        ],
+        [
+          "100"
+        ]
+      ]
+    },
+    {
+      "id": "replatform-strata",
+      "tag": "new-file",
+      "question": "What are the three strata a C++ replatform crosses, and at which of them does the C++ Replatformer not select the technology?",
+      "expect": [
+        [
+          "Language"
+        ],
+        [
+          "Tools"
+        ],
+        [
+          "Supporting technology"
+        ]
+      ]
+    },
+    {
+      "id": "testing-tiers",
+      "tag": "new-file",
+      "question": "How many verification skeletons does the C++ profile's testing directory hold, and what does tier S mean there?",
+      "expect": [
+        [
+          "66",
+          "sixty-six"
+        ],
+        [
+          "Structural"
+        ],
+        [
+          "compiler"
+        ]
+      ]
+    }
+  ]
+}
