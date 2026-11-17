@@ -87,6 +87,12 @@ struct store_stmt {
 
 server_state_store::server_state_store(const std::string & path, int32_t limit_mib) : path(path) {
     limit_bytes = limit_mib > 0 ? uint64_t(limit_mib) << 20 : 0;
+    // SQLite creates the file, not its directory
+    std::error_code ec;
+    const auto dir = std::filesystem::path(path).parent_path();
+    if (!dir.empty()) {
+        std::filesystem::create_directories(dir, ec);
+    }
     if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
         SRV_ERR("store: cannot open %s: %s\n", path.c_str(), sqlite3_errmsg(db));
         sqlite3_close(db);

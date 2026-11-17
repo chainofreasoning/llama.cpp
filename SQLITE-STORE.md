@@ -20,7 +20,13 @@ long contexts.
   use it. No system SQLite is needed. `vendor/sqlite3/README.md` records its source
   and checksum.
 
-Planned on this branch: the same store for `llama-server`.
+- **`llama-server --cache-store <sqlite>`:** a SQLite tier under the server's prompt cache.
+  Every prompt state the cache keeps in RAM is also written to the file, and each slot is
+  saved when the server stops. When nothing in RAM matches a new prompt better, the
+  server restores the best stored state instead of computing it, across restarts.
+  `--cache-store-mib <n>` caps its size (least recently used removed first). Needs the
+  prompt cache on (`--cache-ram`, on by default). Also as `LLAMA_ARG_CACHE_STORE` and
+  `LLAMA_ARG_CACHE_STORE_MIB`.
 
 ## Get it
 
@@ -139,6 +145,24 @@ podman run --rm --device /dev/dri -p 127.0.0.1:8080:8080 -v ~/models:/models:ro 
 ```
 
 ## Use the store
+
+### In llama-server
+
+```
+build/bin/llama-server -m model.gguf --n-gpu-layers all --flash-attn on --cache-store ~/llm-store/server.sqlite
+```
+
+The log shows the store at work: `store: saved <n> tokens` when a state is written,
+`store: restored <n> tokens ... not computed` when one comes back. A state is valid only
+for the same model file (its SHA-256, computed once per file and kept in the store), K
+and V cache types, flash attention setting and llama.cpp build; any other state is never
+offered. The micro-batch is not in the key. Prompts with images are not stored.
+
+Measured (gpt-oss-20b, this branch): a 4,572-token prompt computed in 686 ms; saved at
+shutdown in 0.15 s (118 MiB with its checkpoints); after a restart, restored in 0.12 s,
+with 5 tokens computed and 4,567 taken from the store.
+
+### In llama-bench
 
 ```
 # first run: computes the depth and saves it
