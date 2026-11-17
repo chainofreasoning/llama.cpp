@@ -111,8 +111,92 @@ and SHA-256. Reports, each with the llama.cpp version it ran, go to
 
 The reuse task sets (`reuse-tasks-c++*.json`) ask about the C++ enforcement profile in
 https://github.com/chainofreasoning/sound-design: clone it beside this repository, or
-pass `--source <dir>`. The order of Test 1's runs is in
-[`reuse-store-benchmark.md`](reuse-store-benchmark.md).
+pass `--source <dir>`. The tests and their order are in "The tests, in order", below.
+
+## The tests, in order
+
+These are the tests behind the records below. Run them in this order to measure a
+release; each step says what it needs. Commands run from the repository root.
+
+**Before any test:**
+
+- **Swift 6:** `bench/setup-swift.sh`.
+- **A CUDA build** of this repository in `build/` (`SQLITE-STORE.md`, "Build"). Its
+  llama-bench must have `--store`: `build/bin/llama-bench --help 2>&1 | grep -- --store`.
+- **The GPU to itself:** no other llama-server or GPU job running, except in test 1.
+- **Disk:** the models below (`bench/bench.swift list` gives sizes; `all` is about 200 GB)
+  and about 7 GB for the state store.
+
+| # | Test | Command | Needs |
+|---:|---|---|---|
+| 1 | `perf`: server speed | `bench/bench.swift perf <url> [<url>=64,2048 ...]` | Running llama-server instances. Limit an Intel iGPU to `=64,2048` |
+| 2 | `baseline`, `depth`: llama-bench speed | `bench/bench.swift run all depth`; `bench/bench.swift run all baseline` | The models: `bench/bench.swift fetch all` |
+| 3 | `reuse`: use 1, no store, cold, warm | `bench/bench.swift run qwen3.8-27b reuse`, then twice `bench/bench.swift run qwen3.8-27b reuse --store ~/.local/share/llm-reuse/c++.sqlite` | `fetch qwen3.8-27b`; sound-design cloned beside this repository; the store file new |
+| 4 | `reuse`: use 1, Test 1 (runs 1-6 below) | as below | Test 3's needs; `fetch gemma-4-31b` |
+| 5 | `state`: use 2 | `bench/bench.swift run gemma-4-31b state --store ~/.local/share/llm-reuse/depth.sqlite` | `fetch gemma-4-31b`; a 24 GB GPU (the error it tests depends on the card); the store file new |
+| 6 | The trace | `lldb -b -s llama-bench-oom-trace-v1.0.0.lldb -- ...` (below) | A RelWithDebInfo build; test 5's store file, for the runs with the store |
+
+Test 2 on other backends: `--build <dir>` with another build of this repository (for
+example `build-vulkan/bin`), or, with the linux repository's install,
+`--accelerator cpu|intel` (add `--ub 128` for dense models on the Intel iGPU).
+
+**Test 4, Test 1's runs, in this order.** Each run depends on the one before: run 1
+decides which tasks qualify (a task qualifies when it is answered correctly and its peak
+context exceeds 32,768 in every pass; one that does not is replaced and run 1 repeated);
+run 2 builds the store for the final tasks; runs 3 and 4 put the failure and the
+baseline on record before the test; runs 5 and 6 use run 2's snapshots.
+[`reuse-store-benchmark.md`](reuse-store-benchmark.md) has the full rationale.
+
+```
+# 1. Calibration
+bench/bench.swift run qwen3.8-27b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --ctx 65536 --repeat 3
+
+# 2. Build the store, then snapshot it for runs 5 and 6
+bench/bench.swift run qwen3.8-27b reuse --store ~/.local/share/llm-reuse/c++-oom.sqlite
+bench/bench.swift run qwen3.8-27b reuse --tasks bench/reuse-tasks-c++-b.json --store ~/.local/share/llm-reuse/c++-oom.sqlite
+bench/bench.swift run qwen3.8-27b reuse --tasks bench/reuse-tasks-c++-c.json --role build --store ~/.local/share/llm-reuse/c++-oom.sqlite
+sqlite3 ~/.local/share/llm-reuse/c++-oom.sqlite ".backup $HOME/.local/share/llm-reuse/c++-oom-gemma.sqlite"
+sqlite3 ~/.local/share/llm-reuse/c++-oom.sqlite ".backup $HOME/.local/share/llm-reuse/c++-oom-qwen.sqlite"
+
+# 3. The original failure
+bench/bench.swift run gemma-4-31b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --ctx 65536
+
+# 4. Baseline at the limit (default context 32768)
+bench/bench.swift run gemma-4-31b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --repeat 3
+
+# 5. The test
+bench/bench.swift run gemma-4-31b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --repeat 3 --store ~/.local/share/llm-reuse/c++-oom-gemma.sqlite
+
+# 6. Same model with the store
+bench/bench.swift run qwen3.8-27b reuse --tasks bench/reuse-tasks-c++-c.json --role measured --repeat 3 --store ~/.local/share/llm-reuse/c++-oom-qwen.sqlite
+```
+
+The snapshots need the `sqlite3` command-line shell.
+
+**Test 6, the trace.** Build with debug symbols for host code, then run the trace four
+times, once per configuration of test 5:
+
+```
+cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=ON \
+  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=<arch> -DGGML_VULKAN=OFF \
+  -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_OPENSSL=OFF \
+  -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF
+cmake --build build-debug --parallel --target llama-bench
+cd bench
+lldb -b -s llama-bench-oom-trace-v1.0.0.lldb -- ../build-debug/bin/llama-bench \
+  -m ~/.local/share/llama-models/gemma-4-31B_q4_0-it.gguf -fa on -r 3 -o md -p 0 -n 128 -d 65280 \
+  --store ~/.local/share/llm-reuse/depth.sqlite
+```
+
+| Run | Store | CUDA graphs | Change to the command or script |
+|---|---|---|---|
+| 1 | no | on | leave out `--store` |
+| 2 | yes | on | as above |
+| 3 | no | off | leave out `--store`; add `settings set target.env-vars GGML_CUDA_DISABLE_GRAPHS=1` before `run` in the script |
+| 4 | yes | off | add the same setting |
+
+Each run prints the free GPU memory at every breakpoint. Compare with the step tables
+in [`llama-bench-oom-reuse-sqlite.md`](llama-bench-oom-reuse-sqlite.md).
 
 ## The records
 
