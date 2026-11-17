@@ -659,7 +659,7 @@ let models: [Model] = declaredModels.enumerated()
     .map(\.element)
 
 enum Suite: String, CaseIterable {
-    case baseline, depth, offload, reuse
+    case baseline, depth, offload, reuse, state
 
     var summary: String {
         switch self {
@@ -667,6 +667,7 @@ enum Suite: String, CaseIterable {
         case .depth: return "pp512 and tg128 at 0, 8k, 32k and 64k tokens of context"
         case .offload: return "--n-cpu-moe x threads sweep (models too large for VRAM)"
         case .reuse: return "real tasks through tools; --store <sqlite> turns the reuse store on"
+        case .state: return "KV-cache state store against an out-of-memory error: runs 1-4 at --depth (--store <sqlite>)"
         }
     }
 }
@@ -696,6 +697,8 @@ func benchArguments(_ model: Model, _ suite: Suite, ncmoe: [Int]?, threads: [Int
         }
     case .reuse:
         break  // runs llama-server, not llama-bench (runReuse)
+    case .state:
+        break  // five llama-bench runs of its own (runStateStore)
     case .offload:
         guard let offload = model.offload else {
             fatal("\(model.name) fits in VRAM whole; the offload suite is for models declared with an offload.")
@@ -1823,6 +1826,12 @@ func printUsage() {
       --repeat <n>      Passes over the task set (default 1). Each starts from the same store state and a fresh
                         server; the report gives the mean and range. The store ends as the first pass left it.
       --reps <n>        Repetitions per test (default 3).
+
+    The state suite (the KV-cache state store against an out-of-memory error; needs a llama-bench
+    with --store, from this repository): run 1 (no store; must run out of memory, or it halts),
+    the fill (-ub 256, saves the depth), runs 2-4 (store and CUDA graphs on/off), at -p 0 -n 128.
+      --store <file>    The SQLite file for the depth state (required). Several GB per state.
+      --depth <n>       The depth in tokens (default 65280).
     """)
 }
 
@@ -1907,6 +1916,107 @@ func fetchFile(url: String, path: String, sha256: String, bytes: Int64) {
     print("    Stored: \(destination)")
 }
 
+// MARK: - State suite (the KV-cache state store against an out-of-memory error)
+//
+// The sequence of llama-bench-oom-reuse-sqlite.md, at -p 0 -n 128 -d <depth>:
+//   run 1   no store, CUDA graphs on: must run out of memory, or the test halts
+//   fill    run 1 plus -ub 256 --store: computes the depth at a smaller
+//           micro-batch, which fits, and saves it
+//   run 2   store, CUDA graphs on
+//   run 3   no store, CUDA graphs off (the control)
+//   run 4   store, CUDA graphs off
+// The store key leaves the micro-batch out, so runs 2 and 4 restore at the
+// settings that failed. Needs a llama-bench with --store (this repository).
+
+var stateDepth = 65_280
+
+struct StateRun {
+    let name: String
+    let store: Bool
+    let graphs: Bool
+    let fill: Bool
+}
+
+let stateRuns = [
+    StateRun(name: "run 1", store: false, graphs: true, fill: false),
+    StateRun(name: "fill", store: true, graphs: true, fill: true),
+    StateRun(name: "run 2", store: true, graphs: true, fill: false),
+    StateRun(name: "run 3", store: false, graphs: false, fill: false),
+    StateRun(name: "run 4", store: true, graphs: false, fill: false),
+]
+
+// stdout and stderr together into a file; the exit status back.
+func spawnLogged(_ argv: [String], to file: String) -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = argv
+    _ = FileManager.default.createFile(atPath: file, contents: nil)
+    guard let handle = FileHandle(forWritingAtPath: file) else { fatal("cannot write \(file)") }
+    process.standardOutput = handle
+    process.standardError = handle
+    do { try process.run() } catch { return 127 }
+    process.waitUntilExit()
+    return process.terminationReason == .uncaughtSignal ? 128 + process.terminationStatus : process.terminationStatus
+}
+
+func runStateStore(_ model: Model, kv: String?, reps: Int, base: String, started: Date, facts: [(String, String)]) -> (String, Bool) {
+    guard let store = storePath else { fatal("the state suite needs --store <sqlite>: the file that holds the depth state.") }
+    let help = query(["sh", "-c", "exec \"$@\" --help 2>&1", "sh"] + onAccelerator("llama-bench")).output
+    guard help.contains("--store") else {
+        fatal("this llama-bench has no --store: build this repository (SQLITE-STORE.md), and pass --build <dir>.")
+    }
+    var common = onAccelerator("llama-bench") + ["-m", model.path, "-fa", "on", "-r", "\(reps)", "-o", "md",
+        "-p", "0", "-n", "128", "-d", "\(stateDepth)"]
+    if let kv { common += ["-ctk", kv, "-ctv", kv] }
+
+    struct Outcome { let run: StateRun; let argv: [String]; let status: Int32; let rows: [String]; let oom: [String]; let storeLines: [String] }
+    var outcomes: [Outcome] = []
+    var halted: String?
+    for run in stateRuns {
+        var argv = run.graphs ? common : ["env", "GGML_CUDA_DISABLE_GRAPHS=1"] + common
+        if run.fill { argv += ["-ub", "256"] }
+        if run.store { argv += ["--store", store] }
+        let log = "\(base)-\(run.name.replacingOccurrences(of: " ", with: "")).log"
+        print("    \(run.name) (\(ISO8601DateFormatter().string(from: Date())))")
+        print("    >>> \(argv.joined(separator: " "))")
+        let status = spawnLogged(argv, to: log)
+        let lines = ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        let rows = lines.filter { $0.hasPrefix("| ") && !$0.hasPrefix("| model") && !$0.hasPrefix("| -") }
+        let oom = lines.filter { $0.contains("out of memory") || $0.contains("cuMemCreate") || $0.contains("cudaGraphInstantiate") }
+        let storeLines = lines.filter { $0.contains("store:") }
+        for line in rows + oom.prefix(3) + storeLines { print("      \(line)") }
+        print("      exit \(status)")
+        outcomes.append(Outcome(run: run, argv: argv, status: status, rows: rows, oom: oom, storeLines: storeLines))
+        if status == 130 || status == 143 { halted = "interrupted"; break }
+        if run.name == "run 1", oom.isEmpty {
+            halted = "run 1 did not run out of memory, so this model, depth and GPU do not reproduce the error the store is tested against"
+            break
+        }
+    }
+
+    var md = "# State store: \(model.name), depth \(stateDepth)\n\n"
+    md += "Started \(ISO8601DateFormatter().string(from: started)). Store: `\(store)`.\n\n"
+    md += "| | |\n|---|---|\n" + facts.map { "| \($0.0) | \($0.1) |" }.joined(separator: "\n") + "\n\n"
+    md += "| Run | Store | CUDA graphs | Result |\n|---|---|---|---|\n"
+    for o in outcomes {
+        let result: String
+        if o.status == 0, !o.rows.isEmpty {
+            result = "finished: " + o.rows.compactMap { $0.split(separator: "|").last.map { $0.trimmingCharacters(in: .whitespaces) } }.joined(separator: "; ") + " t/s"
+        } else if !o.oom.isEmpty {
+            result = "out of memory" + (o.oom.contains { $0.contains("cudaGraphInstantiate") } ? " (building a CUDA graph)" : "")
+        } else {
+            result = "exit \(o.status)"
+        }
+        md += "| \(o.run.name) | \(o.run.store ? (o.run.fill ? "fill (-ub 256)" : "yes") : "no") | \(o.run.graphs ? "on" : "off") | \(result) |\n"
+    }
+    if let halted { md += "\n**Halted:** \(halted).\n" }
+    md += "\n## Commands\n\n" + outcomes.map { "- \($0.run.name): `\($0.argv.joined(separator: " "))`" }.joined(separator: "\n") + "\n"
+    md += "\n## Store lines\n\n" + outcomes.flatMap { o in o.storeLines.map { "- \(o.run.name): \($0)" } }.joined(separator: "\n") + "\n"
+    let path = "\(base).md"
+    if (try? md.write(toFile: path, atomically: true, encoding: .utf8)) == nil { fatal("cannot write \(path)") }
+    return (path, halted == nil)
+}
+
 func fetch(_ model: Model) {
     fetchFile(url: model.url, path: model.path, sha256: model.sha256, bytes: model.bytes)
     if let projector = model.projector, let path = model.projectorPath, let url = model.projectorURL {
@@ -1985,6 +2095,17 @@ func run(_ selected: [Model], _ suite: Suite, ncmoe: [Int]?, threads: [Int]?, kv
             if let started = serverStarted() { failed.append("\(model.name) (invalid: \(started) started during the run)") }
             continue
         }
+        if suite == .state {
+            guard !dryRun else {
+                print("    Would run run 1, fill, runs 2-4 at depth \(stateDepth), store \(storePath ?? "(none: --store needed)")")
+                continue
+            }
+            let (path, completed) = runStateStore(model, kv: kv, reps: reps, base: "\(base)-d\(stateDepth)", started: started, facts: facts)
+            written.append(path)
+            if !completed { failed.append("\(model.name) (halted; see the report)") }
+            if let started = serverStarted() { failed.append("\(model.name) (invalid: \(started) started during the run)") }
+            continue
+        }
         print("    >>> \(argv.joined(separator: " "))")
         guard !dryRun else { continue }
         let sampler = accelerator.usesDGPU ? startGpuSampler("\(base)-gpu.csv") : nil
@@ -2058,6 +2179,9 @@ while let arg = arguments.next() {
     case "--store":
         guard let value = arguments.next(), !value.hasPrefix("-") else { fatal("--store takes a path to an SQLite file.") }
         storePath = URL(fileURLWithPath: (value as NSString).expandingTildeInPath).standardizedFileURL.path
+    case "--depth":
+        guard let n = arguments.next().flatMap({ Int($0) }), n > 0 else { fatal("--depth takes a token count.") }
+        stateDepth = n
     case "--ctx":
         guard let n = arguments.next().flatMap({ Int($0) }), n >= 2048 else { fatal("--ctx takes a context size of at least 2048.") }
         reuseContext = n
