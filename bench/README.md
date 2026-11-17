@@ -107,7 +107,7 @@ and SHA-256. Reports, each with the llama.cpp version it ran, go to
 | `bench/bench.swift run <model> offload` | Expert offload × threads, for models larger than VRAM |
 | `bench/bench.swift run <model> reuse [--store <sqlite>]` | **Use 1**: real tasks through tools, through llama-server; no store, then cold, then warm |
 | `bench/bench.swift run <model> state --store <sqlite>` | **Use 2**: run 1 (must run out of memory, or it halts), the fill, runs 2-4 |
-| `bench/bench.swift perf [<url> ...]` | Running llama-server instances' speed through their endpoints: single requests at 64, 2k and 16k prompt tokens, two slots at once, two servers at once (from the server's own timings). Type-checked, not yet run |
+| `bench/bench.swift perf [<url>[=<sizes>] ...]` | Running llama-server instances' speed through their endpoints: single requests at 64, 2k and 16k prompt tokens (`url=64,2048` for a server that needs smaller ones: an Intel iGPU, where a 16k prefill resets the GPU), two slots at once, two servers at once (from the server's own timings) |
 
 The reuse task sets (`reuse-tasks-c++*.json`) ask about the C++ enforcement profile in
 https://github.com/chainofreasoning/sound-design: clone it beside this repository, or

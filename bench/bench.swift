@@ -1783,7 +1783,7 @@ func printUsage() {
       bench/bench.swift list [<selector>] [--fit vram|offload]
       bench/bench.swift capabilities [<selector>]
       bench/bench.swift fetch <selector> [--fit vram|offload] [--dry-run]
-      bench/bench.swift perf [<server url> ...] [--sizes <list>]
+      bench/bench.swift perf [<server url>[=<sizes>] ...] [--sizes <list>]
       bench/bench.swift run <selector> <suite> [--build <dir> | --accelerator <name>] [--fit vram|offload]
                                    [--ncmoe <list>] [--threads <list>] [--reps <n>] [--dry-run]
 
@@ -1838,6 +1838,8 @@ func printUsage() {
               timings: one request at each size (default 64, 2048, 16384 prompt tokens; --sizes), two at
               once on a server with two or more slots, and the first two servers at once. Prompt cache
               off, \(perfGenerate) tokens generated, temperature 0. Default URL http://127.0.0.1:8080.
+              url=64,2048 gives one server its own sizes: an Intel iGPU must stop at 2048, because a
+              longer prefill outlasts i915's preempt timeout and the GPU is reset (ErrorDeviceLost).
     """)
 }
 
@@ -2166,6 +2168,10 @@ struct PerfServer {
     let model: String
     let slots: Int
     let build: String
+    // Prompt sizes for this server: url=64,2048, else --sizes. A slow device needs
+    // smaller ones: on an Intel iGPU, a long prefill submission outlasts i915's preempt
+    // timeout and the GPU is reset (a 16k prompt did, 2026-11-17: ErrorDeviceLost).
+    let sizes: [Int]
 }
 
 struct PerfTiming {
@@ -2186,7 +2192,11 @@ func perfJson(_ text: String) -> [String: Any]? {
     (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
 }
 
-func perfServer(_ url: String) -> PerfServer {
+func perfServer(_ spec: String) -> PerfServer {
+    // url, or url=64,2048 for this server's own sizes
+    let parts = spec.split(separator: "=", maxSplits: 1).map(String.init)
+    let url = parts[0].hasSuffix("/") ? String(parts[0].dropLast()) : parts[0]
+    let sizes = parts.count == 2 ? intList(parts[1], "\(url)=") : perfSizes
     // A server started on demand answers once its model is loaded.
     guard query(["curl", "-fsS", "--max-time", "300", "\(url)/health"]).succeeded else {
         fatal("\(url): not serving (no /health).")
@@ -2194,7 +2204,8 @@ func perfServer(_ url: String) -> PerfServer {
     let props = perfJson(query(["curl", "-fsS", "--max-time", "10", "\(url)/props"]).output) ?? [:]
     let models = perfJson(query(["curl", "-fsS", "--max-time", "10", "\(url)/v1/models"]).output)
     let model = ((models?["data"] as? [[String: Any]])?.first?["id"] as? String) ?? (props["model_alias"] as? String) ?? "?"
-    return PerfServer(url: url, model: model, slots: props["total_slots"] as? Int ?? 1, build: props["build_info"] as? String ?? "?")
+    return PerfServer(url: url, model: model, slots: props["total_slots"] as? Int ?? 1, build: props["build_info"] as? String ?? "?",
+        sizes: sizes)
 }
 
 func perfMeasure(_ server: PerfServer, promptTokens: Int) -> Result<PerfTiming, PerfError> {
@@ -2264,14 +2275,16 @@ func perf(_ urls: [String]) {
     emit("# Server speed\n")
     emit("Started \(ISO8601DateFormatter().string(from: started)). Each request: prompt cache off, \(perfGenerate) tokens "
         + "generated, temperature 0, seed \(perfSeed).\n")
-    for server in servers { emit("- \(server.url): \(server.model), \(server.slots) slot(s), build \(server.build)") }
+    for server in servers {
+        emit("- \(server.url): \(server.model), \(server.slots) slot(s), build \(server.build), sizes \(server.sizes.map(String.init).joined(separator: ", "))")
+    }
     emit("")
     emit("| Server | Case | Prompt tokens | Prompt t/s | Generated | Generation t/s | Wall |")
     emit("|---|---|---:|---:|---:|---:|---:|")
     // One unmeasured request each, so first-request costs are not measured.
     for server in servers { _ = perfMeasure(server, promptTokens: 64) }
     for server in servers {
-        for size in perfSizes { row(server, "single, ~\(size)", perfMeasure(server, promptTokens: size)) }
+        for size in server.sizes { row(server, "single, ~\(size)", perfMeasure(server, promptTokens: size)) }
     }
     for server in servers where server.slots >= 2 {
         let (a, b) = perfTogether({ perfMeasure(server, promptTokens: perfConcurrentSize) },
@@ -2411,8 +2424,8 @@ case "fetch":
     }
 case "perf":
     // Running llama-server instances, by URL (default llama-server's own 127.0.0.1:8080).
-    let urls = positional.dropFirst().map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
-    perf(urls.isEmpty ? ["http://127.0.0.1:8080"] : Array(urls))
+    let urls = Array(positional.dropFirst())
+    perf(urls.isEmpty ? ["http://127.0.0.1:8080"] : urls)
 case "capabilities":
     print("Capabilities: declared in declaredModels, checked against each fetched model's files.")
     if !checkCapabilities(select(positional.dropFirst().first)) { fatal("a declaration does not match its files.") }
