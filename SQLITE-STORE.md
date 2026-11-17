@@ -81,20 +81,21 @@ cmake --build build-vulkan --parallel --target llama-server llama-cli llama-benc
 
 ## Containers
 
-A Containerfile in `container/`, built with Podman, on Ubuntu 26.04. It
+Two Containerfiles in `container/`, built with Podman, both on Ubuntu 26.04. Each
 builds this checkout of the source: the image is the commit you build it from.
 
 | Containerfile | Base images (pinned by digest) | Backends |
 |---|---|---|
 | `container/cuda.Containerfile` | NVIDIA CUDA 13.4.3 for Ubuntu 26.04, `nvcr.io/nvidia/cuda` (devel to build, runtime to run) | CPU + CUDA |
+| `container/vulkan.Containerfile` (optional) | Canonical's Ubuntu 26.04, `public.ecr.aws/ubuntu/ubuntu` | CPU + Vulkan (Mesa) |
 
-It has two targets:
+Each has two targets:
 
 - `server` (the default): `llama-server` only, listening on port 8080.
 - `full`: `llama-server`, `llama-cli` and `llama-bench`, with `--store`.
 
 Models and stores are never built into an image. Mount them at `/models` and `/store`.
-The image has no web UI (it needs npm to build) and no Python.
+The images have no web UI (it needs npm to build) and no Python.
 
 ### Build
 
@@ -103,11 +104,12 @@ From the repository root:
 ```
 podman build -f container/cuda.Containerfile   --target server -t llama-store-cuda:server .
 podman build -f container/cuda.Containerfile   --target full   -t llama-store-cuda:full .
+podman build -f container/vulkan.Containerfile --target server -t llama-store-vulkan:server .
 ```
 
 Build arguments (`--build-arg NAME=value`):
 
-- `CUDA_ARCHITECTURES`: `default` builds ggml's list for CUDA 13.4, Turing to
+- `CUDA_ARCHITECTURES` (CUDA only): `default` builds ggml's list for CUDA 13.4, Turing to
   Blackwell. One architecture is much faster to build: `120a-real` for Blackwell (12.0),
   `89-real` for Ada (8.9).
 - `GGML_NATIVE`: `OFF` (default) runs on any x86-64 CPU; `ON` tunes CPU code for the
@@ -127,6 +129,13 @@ podman run --rm --device nvidia.com/gpu=all -p 127.0.0.1:8080:8080 \
 
 podman run --rm --device nvidia.com/gpu=all -v ~/models:/models:ro -v ~/llm-store:/store \
   llama-store-cuda:full -m /models/model.gguf -fa on -p 0 -n 128 -d 65280 --store /store/depth.sqlite
+```
+
+The Vulkan image needs the GPU's render device:
+
+```
+podman run --rm --device /dev/dri -p 127.0.0.1:8080:8080 -v ~/models:/models:ro \
+  llama-store-vulkan:server -m /models/model.gguf -ngl all
 ```
 
 ## Use the store
