@@ -1805,7 +1805,7 @@ func printUsage() {
               pinned by revision and SHA-256. Models already in \(systemModelDirectory) are used there.
     run       Run the suite on each selected model that is present, and write one report per model to
               \(resultsDirectory)/. Refuses while a llama-server service is running (each stops by itself
-              2 minutes after its last connection) or, on the dGPU, while anything holds it. A service started
+              10 minutes after its last connection) or, on the dGPU, while anything holds it. A service started
               during the run makes that model's result invalid, and the report says so.
 
     No command needs root, and none uses sudo.
@@ -2045,7 +2045,7 @@ func run(_ selected: [Model], _ suite: Suite, ncmoe: [Int]?, threads: [Int]?, kv
     let running = servers.filter { trimmed(query(["systemctl", "is-active", $0]).output) == "active" }
     if !running.isEmpty {
         fatal("\(running.joined(separator: ", ")) running: it holds its device's memory and would compete with the run.",
-            "It stops by itself 2 minutes after its last connection; run again once it has.")
+            "It stops by itself 10 minutes after its last connection; run again once it has.")
     }
     if accelerator.usesDGPU {
         let holders = gpuComputePids()
