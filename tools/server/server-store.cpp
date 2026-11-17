@@ -217,7 +217,12 @@ bool server_state_store::save(const server_prompt_cache_state & state) {
     if (!db || key.empty()) {
         return false;
     }
-    const llama_tokens & tokens = state.prompt.tokens.get_tokens();
+    // by index: get_tokens() asserts on a multimodal server, and positions an
+    // image or audio chunk occupies read LLAMA_TOKEN_NULL here
+    llama_tokens tokens(state.prompt.tokens.size());
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        tokens[i] = state.prompt.tokens[i];
+    }
     if (tokens.empty() || state.data.main.empty()) {
         return false;
     }
@@ -326,7 +331,11 @@ server_state_store::candidate server_state_store::find(const server_tokens & tok
     if (!db || key.empty() || tokens_new.size() == 0) {
         return best;
     }
-    const llama_tokens & tnew = tokens_new.get_tokens();
+    // by index: get_tokens() asserts on a multimodal server
+    llama_tokens tnew(tokens_new.size());
+    for (size_t i = 0; i < tnew.size(); ++i) {
+        tnew[i] = tokens_new[i];
+    }
     float f_keep_best = f_keep_base;
     float f_sim_best  = f_sim_base;
 
