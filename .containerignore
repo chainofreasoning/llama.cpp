@@ -1,0 +1,11 @@
+# Podman build context for container/*.Containerfile.
+# .git stays in: the build reads the commit and build number from it.
+build*/
+.cache/
+.github/
+.vs/
+.vscode/
+models/*
+tools/ui/node_modules/
+*.o
+*.a
