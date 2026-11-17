@@ -1,4 +1,7 @@
+#include <sqlite3.h>
+
 #include <algorithm>
+#include <memory>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -376,6 +379,7 @@ struct cmd_params {
     bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
+    std::string                      store; // --store: SQLite reuse store for the depth state
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -440,6 +444,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  --store <sqlite>                            reuse store: restore the depth state from SQLite, save it after computing\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)\n");
     if (llama_supports_rpc()) {
@@ -1059,6 +1064,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "--store") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.store = argv[i];
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -2162,6 +2173,69 @@ struct sql_printer : public printer {
     }
 };
 
+// Reuse store: the depth's computed KV state, kept in SQLite across runs, so a
+// later run restores it instead of recomputing it. One state is split into
+// chunks: a single SQLite value is limited to 1 GB.
+struct depth_store {
+    sqlite3 * db = nullptr;
+
+    explicit depth_store(const std::string & path) {
+        if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
+            fprintf(stderr, "store: cannot open %s: %s\n", path.c_str(), sqlite3_errmsg(db));
+            exit(1);
+        }
+        exec("CREATE TABLE IF NOT EXISTS depth_state (key TEXT NOT NULL, chunk INTEGER NOT NULL, data BLOB NOT NULL, "
+             "PRIMARY KEY (key, chunk))");
+    }
+
+    ~depth_store() { sqlite3_close(db); }
+
+    void exec(const char * sql) {
+        char * err = nullptr;
+        if (sqlite3_exec(db, sql, nullptr, nullptr, &err) != SQLITE_OK) {
+            fprintf(stderr, "store: %s: %s\n", sql, err ? err : "?");
+            exit(1);
+        }
+    }
+
+    bool load(const std::string & key, std::vector<uint8_t> & buf) {
+        buf.clear();
+        sqlite3_stmt * st = nullptr;
+        sqlite3_prepare_v2(db, "SELECT data FROM depth_state WHERE key = ? ORDER BY chunk", -1, &st, nullptr);
+        sqlite3_bind_text(st, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            const uint8_t * data = (const uint8_t *) sqlite3_column_blob(st, 0);
+            buf.insert(buf.end(), data, data + sqlite3_column_bytes(st, 0));
+        }
+        sqlite3_finalize(st);
+        return !buf.empty();
+    }
+
+    void save(const std::string & key, const std::vector<uint8_t> & buf) {
+        const size_t chunk_size = size_t(256) << 20;
+        exec("BEGIN");
+        sqlite3_stmt * del = nullptr;
+        sqlite3_prepare_v2(db, "DELETE FROM depth_state WHERE key = ?", -1, &del, nullptr);
+        sqlite3_bind_text(del, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(del);
+        sqlite3_finalize(del);
+        sqlite3_stmt * ins = nullptr;
+        sqlite3_prepare_v2(db, "INSERT INTO depth_state (key, chunk, data) VALUES (?, ?, ?)", -1, &ins, nullptr);
+        for (size_t off = 0, n = 0; off < buf.size(); off += chunk_size, n++) {
+            sqlite3_bind_text(ins, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(ins, 2, (sqlite3_int64) n);
+            sqlite3_bind_blob64(ins, 3, buf.data() + off, std::min(chunk_size, buf.size() - off), SQLITE_STATIC);
+            if (sqlite3_step(ins) != SQLITE_DONE) {
+                fprintf(stderr, "store: insert failed: %s\n", sqlite3_errmsg(db));
+                exit(1);
+            }
+            sqlite3_reset(ins);
+        }
+        sqlite3_finalize(ins);
+        exec("COMMIT");
+    }
+};
+
 struct ctx_state {
     int depth = 0; // in tokens
 
@@ -2319,6 +2393,11 @@ int llama_bench(int argc, char ** argv) {
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
     ctx_state cstate;
 
+    std::unique_ptr<depth_store> store;
+    if (!params.store.empty()) {
+        store = std::make_unique<depth_store>(params.store);
+    }
+
     int  params_idx   = 0;
     auto params_count = params_instances.size();
     for (const auto & inst : params_instances) {
@@ -2459,6 +2538,23 @@ int llama_bench(int argc, char ** argv) {
                     }
                 }
 
+                // the store's key: the same model, depth and KV cache types give the same state
+                const std::string store_key = t.model_filename + "|depth=" + std::to_string(t.n_depth) +
+                    "|type_k=" + ggml_type_name(t.type_k) + "|type_v=" + ggml_type_name(t.type_v);
+
+                if (!is_cached && store) {
+                    std::vector<uint8_t> buf;
+                    if (store->load(store_key, buf) && llama_state_seq_set_data(ctx, buf.data(), buf.size(), 0) != 0) {
+                        fprintf(stderr, "llama-bench: store: depth %d restored from %s (%zu bytes), not recomputed\n",
+                                t.n_depth, params.store.c_str(), buf.size());
+                        cstate.depth = t.n_depth;
+                        cstate.buf   = std::move(buf);
+                        is_cached    = true;
+                    } else {
+                        fprintf(stderr, "llama-bench: store: depth %d not in %s, computing it\n", t.n_depth, params.store.c_str());
+                    }
+                }
+
                 if (!is_cached) {
                     if (params.progress) {
                         fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d\n", params_idx, params_count,
@@ -2476,6 +2572,11 @@ int llama_bench(int argc, char ** argv) {
                     cstate.depth = t.n_depth;
                     cstate.buf.resize(llama_state_seq_get_size(ctx, 0));
                     llama_state_seq_get_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
+                    if (store) {
+                        store->save(store_key, cstate.buf);
+                        fprintf(stderr, "llama-bench: store: depth %d saved to %s (%zu bytes)\n", t.n_depth,
+                                params.store.c_str(), cstate.buf.size());
+                    }
                 } else {
                     if (params.progress) {
                         fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d (cached)\n", params_idx, params_count,
