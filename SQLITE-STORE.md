@@ -157,12 +157,58 @@ file, tokens, and cache types.
 If generation then runs out of memory while building CUDA graphs, turn them off:
 `GGML_CUDA_DISABLE_GRAPHS=1`.
 
+## Benchmarks (optional)
+
+`bench/` measures both uses of a SQLite store. Building llama.cpp does not need it.
+
+- **Use 1, speed and token reduction:** the store keeps what a model worked out, as
+  text, and the harness gives the model those entries instead of the files and
+  reasoning that produced them. The `reuse` suite: real tasks through tools, run against
+  `llama-server`, with the store off (`baseline`) and on (`--store`, cold then warm).
+- **Use 2, out-of-memory mitigation:** the store keeps the KV cache the engine computed,
+  and a later run restores it instead of computing it (`llama-bench --store`, above).
+  The `state` suite runs the out-of-memory test: run 1 without the store must run out
+  of memory, then the fill, then runs 2-4 with the store and CUDA graphs on and off.
+
+The benchmark is Swift 6 or later. `bench/setup-swift.sh` checks for it and, if it is
+missing, installs it as you through swiftly, swift.org's Linux installer, after checking
+its signature against swift.org's keys:
+
+```
+bench/setup-swift.sh            # install if missing
+bench/setup-swift.sh --check    # only check
+```
+
+Run it from the repository root, after building (see "Build"). Models are pinned by
+Hugging Face revision and SHA-256; `fetch` downloads them to `~/.local/share/llama-models`.
+Reports go to `~/.local/share/llama-bench/`, each with the llama.cpp version it ran.
+
+```
+bench/bench.swift list                                   # models, suites
+bench/bench.swift fetch gemma-4-31b                      # download a model
+bench/bench.swift run gpt-oss-20b baseline               # speed at empty context
+bench/bench.swift run all depth                          # speed at 0, 8k, 32k and 64k context
+bench/bench.swift run gemma-4-31b state --store ~/llm-store/depth.sqlite     # use 2
+bench/bench.swift run qwen3.8-27b reuse                                       # use 1, no store
+bench/bench.swift run qwen3.8-27b reuse --store ~/llm-store/c++.sqlite        # use 1, cold; again: warm
+```
+
+It runs `build/bin` by default; `--build <dir>` picks another build (for example
+`build-vulkan/bin`). The reuse task sets ask about the C++ enforcement profile in
+https://github.com/chainofreasoning/sound-design: clone it beside this repository, or
+pass `--source <dir>`.
+
 ## Measured
 
-On llama.cpp v0.9.0, Gemma 4 31B at a 65,536-token context on a 24 GB GPU: without the
-store, prefill runs out of GPU memory; with it (and CUDA graphs off), the run finishes
-at 20.09 ± 0.27 t/s. Write-up, traces and method:
-https://github.com/chainofreasoning/sound-design/blob/main/enforcement/languages/bechmarking/llama-bench-oom-reuse-sqlite.md
+On llama.cpp v0.9.0, a 24 GB GPU:
+
+- **Use 1:** Qwen3.8-27B on 13 C++-profile tasks, warm store against no store: 73% fewer
+  prompt tokens computed, 58% fewer generated, 64% less time, 13/13 correct.
+  https://github.com/chainofreasoning/sound-design/blob/main/enforcement/languages/bechmarking/reuse-store-benchmark.md
+- **Use 2:** Gemma 4 31B at a 65,536-token context: without the store, prefill runs out
+  of GPU memory; with it (and CUDA graphs off), the run finishes at 20.09 ± 0.27 t/s.
+  https://github.com/chainofreasoning/sound-design/blob/main/enforcement/languages/bechmarking/llama-bench-oom-reuse-sqlite.md
+
 Being repeated on v1.0.0.
 
 ## Updating to a new upstream release
