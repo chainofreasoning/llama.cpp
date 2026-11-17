@@ -1783,6 +1783,7 @@ func printUsage() {
       bench/bench.swift list [<selector>] [--fit vram|offload]
       bench/bench.swift capabilities [<selector>]
       bench/bench.swift fetch <selector> [--fit vram|offload] [--dry-run]
+      bench/bench.swift perf [<server url> ...] [--sizes <list>]
       bench/bench.swift run <selector> <suite> [--build <dir> | --accelerator <name>] [--fit vram|offload]
                                    [--ncmoe <list>] [--threads <list>] [--reps <n>] [--dry-run]
 
@@ -1832,6 +1833,11 @@ func printUsage() {
     the fill (-ub 256, saves the depth), runs 2-4 (store and CUDA graphs on/off), at -p 0 -n 128.
       --store <file>    The SQLite file for the depth state (required). Several GB per state.
       --depth <n>       The depth in tokens (default 65280).
+
+    perf      Running llama-server instances' speed through their endpoints, from each server's own
+              timings: one request at each size (default 64, 2048, 16384 prompt tokens; --sizes), two at
+              once on a server with two or more slots, and the first two servers at once. Prompt cache
+              off, \(perfGenerate) tokens generated, temperature 0. Default URL http://127.0.0.1:8080.
     """)
 }
 
@@ -2140,6 +2146,154 @@ func run(_ selected: [Model], _ suite: Suite, ncmoe: [Int]?, threads: [Int]?, kv
     }
 }
 
+// MARK: - perf: running servers' speed through their endpoints
+//
+// From each server's own timings. Every request is the same for the same
+// size: a fixed prompt, temperature 0, a fixed seed, the prompt cache off (the
+// whole prompt is prefilled) and exactly perfGenerate tokens generated (end of
+// text ignored). Cases: one request at each size; two at once on a server
+// with two or more slots; and with two or more servers, the first two at once.
+// From the linux repository's 00-setup-llama-cpp.swift perf, which measures
+// its systemd services; here any llama-server URLs.
+
+let perfGenerate = 256
+let perfSeed = 1
+var perfSizes = [64, 2_048, 16_384]
+let perfConcurrentSize = 2_048
+
+struct PerfServer {
+    let url: String
+    let model: String
+    let slots: Int
+    let build: String
+}
+
+struct PerfTiming {
+    let promptTokens: Int
+    let promptPerSecond: Double
+    let generated: Int
+    let generatedPerSecond: Double
+    let wall: Double
+}
+
+// About `tokens` tokens of fixed text: one line is about 8 tokens.
+func perfPrompt(tokens: Int) -> String {
+    (1...max(1, tokens / 8)).map { "Line \($0): the quick brown fox." }.joined(separator: "\n")
+        + "\nCount the lines above."
+}
+
+func perfJson(_ text: String) -> [String: Any]? {
+    (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+}
+
+func perfServer(_ url: String) -> PerfServer {
+    // A server started on demand answers once its model is loaded.
+    guard query(["curl", "-fsS", "--max-time", "300", "\(url)/health"]).succeeded else {
+        fatal("\(url): not serving (no /health).")
+    }
+    let props = perfJson(query(["curl", "-fsS", "--max-time", "10", "\(url)/props"]).output) ?? [:]
+    let models = perfJson(query(["curl", "-fsS", "--max-time", "10", "\(url)/v1/models"]).output)
+    let model = ((models?["data"] as? [[String: Any]])?.first?["id"] as? String) ?? (props["model_alias"] as? String) ?? "?"
+    return PerfServer(url: url, model: model, slots: props["total_slots"] as? Int ?? 1, build: props["build_info"] as? String ?? "?")
+}
+
+func perfMeasure(_ server: PerfServer, promptTokens: Int) -> Result<PerfTiming, PerfError> {
+    let body: [String: Any] = [
+        "model": server.model,
+        "messages": [["role": "user", "content": perfPrompt(tokens: promptTokens)]],
+        "max_tokens": perfGenerate,
+        "ignore_eos": true,
+        "cache_prompt": false,
+        "temperature": 0,
+        "seed": perfSeed,
+        // gpt-oss reads reasoning_effort, Qwen enable_thinking; a template ignores the other.
+        "chat_template_kwargs": ["reasoning_effort": "low", "enable_thinking": false],
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: body) else { fatal("could not encode a request body") }
+    let started = Date()
+    let reply = queryInput(["curl", "-sS", "--fail-with-body", "--max-time", "900", "-H", "Content-Type: application/json",
+        "--data-binary", "@-", "\(server.url)/v1/chat/completions"], input: String(decoding: data, as: UTF8.self))
+    let wall = Date().timeIntervalSince(started)
+    guard reply.succeeded else { return .failure(PerfError("\(server.url): exit \(reply.status): \(reply.output.suffix(200))")) }
+    guard let timings = perfJson(reply.output)?["timings"] as? [String: Any],
+        let promptN = timings["prompt_n"] as? Int, let promptRate = timings["prompt_per_second"] as? Double,
+        let generated = timings["predicted_n"] as? Int, let generatedRate = timings["predicted_per_second"] as? Double
+    else { return .failure(PerfError("\(server.url): no timings in the reply")) }
+    return .success(PerfTiming(promptTokens: promptN, promptPerSecond: promptRate, generated: generated,
+        generatedPerSecond: generatedRate, wall: wall))
+}
+
+struct PerfError: Error, CustomStringConvertible {
+    let description: String
+    init(_ description: String) { self.description = description }
+}
+
+// Two requests at the same time, each on its own thread.
+func perfTogether(_ a: () -> Result<PerfTiming, PerfError>, _ b: () -> Result<PerfTiming, PerfError>)
+    -> (Result<PerfTiming, PerfError>, Result<PerfTiming, PerfError>) {
+    var results: [Result<PerfTiming, PerfError>?] = [nil, nil]
+    let lock = NSLock()
+    withoutActuallyEscaping(a) { a in
+        withoutActuallyEscaping(b) { b in
+            DispatchQueue.concurrentPerform(iterations: 2) { i in
+                let r = i == 0 ? a() : b()
+                lock.lock(); results[i] = r; lock.unlock()
+            }
+        }
+    }
+    return (results[0]!, results[1]!)
+}
+
+func perf(_ urls: [String]) {
+    let servers = urls.map(perfServer)
+    var lines: [String] = []
+    var failures: [String] = []
+    func emit(_ line: String) { print(line); lines.append(line) }
+    func row(_ server: PerfServer, _ label: String, _ result: Result<PerfTiming, PerfError>) {
+        switch result {
+        case .success(let t):
+            emit("| \(server.url) | \(label) | \(t.promptTokens) | \(String(format: "%.0f", t.promptPerSecond)) "
+                + "| \(t.generated) | \(String(format: "%.1f", t.generatedPerSecond)) | \(String(format: "%.1f s", t.wall)) |")
+            if t.generated != perfGenerate { failures.append("\(server.url) \(label): generated \(t.generated)") }
+        case .failure(let error):
+            emit("| \(server.url) | \(label) | FAIL: \(error) | | | | |")
+            failures.append("\(server.url) \(label)")
+        }
+    }
+    let started = Date()
+    emit("# Server speed\n")
+    emit("Started \(ISO8601DateFormatter().string(from: started)). Each request: prompt cache off, \(perfGenerate) tokens "
+        + "generated, temperature 0, seed \(perfSeed).\n")
+    for server in servers { emit("- \(server.url): \(server.model), \(server.slots) slot(s), build \(server.build)") }
+    emit("")
+    emit("| Server | Case | Prompt tokens | Prompt t/s | Generated | Generation t/s | Wall |")
+    emit("|---|---|---:|---:|---:|---:|---:|")
+    // One unmeasured request each, so first-request costs are not measured.
+    for server in servers { _ = perfMeasure(server, promptTokens: 64) }
+    for server in servers {
+        for size in perfSizes { row(server, "single, ~\(size)", perfMeasure(server, promptTokens: size)) }
+    }
+    for server in servers where server.slots >= 2 {
+        let (a, b) = perfTogether({ perfMeasure(server, promptTokens: perfConcurrentSize) },
+                                  { perfMeasure(server, promptTokens: perfConcurrentSize) })
+        row(server, "2 slots at once, ~\(perfConcurrentSize) (1)", a)
+        row(server, "2 slots at once, ~\(perfConcurrentSize) (2)", b)
+    }
+    if servers.count >= 2 {
+        let (one, two) = (servers[0], servers[1])
+        let (a, b) = perfTogether({ perfMeasure(one, promptTokens: perfConcurrentSize) },
+                                  { perfMeasure(two, promptTokens: perfConcurrentSize) })
+        row(one, "with \(two.url) at once, ~\(perfConcurrentSize)", a)
+        row(two, "with \(one.url) at once, ~\(perfConcurrentSize)", b)
+    }
+    try? FileManager.default.createDirectory(atPath: resultsDirectory, withIntermediateDirectories: true)
+    let stamp = ISO8601DateFormatter().string(from: started).replacingOccurrences(of: ":", with: "")
+    let path = "\(resultsDirectory)/\(stamp)-perf.md"
+    try? (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+    print("\nResults:\n    \(path)")
+    if !failures.isEmpty { fatal("perf: \(failures.joined(separator: "; "))") }
+}
+
 // MARK: - Arguments
 
 func intList(_ text: String?, _ flag: String) -> [Int] {
@@ -2179,6 +2333,8 @@ while let arg = arguments.next() {
     case "--store":
         guard let value = arguments.next(), !value.hasPrefix("-") else { fatal("--store takes a path to an SQLite file.") }
         storePath = URL(fileURLWithPath: (value as NSString).expandingTildeInPath).standardizedFileURL.path
+    case "--sizes":
+        perfSizes = intList(arguments.next(), "--sizes")
     case "--depth":
         guard let n = arguments.next().flatMap({ Int($0) }), n > 0 else { fatal("--depth takes a token count.") }
         stateDepth = n
@@ -2253,6 +2409,10 @@ case "fetch":
         print("\nCapabilities, checked against the files:")
         if !checkCapabilities(chosen) { fatal("a declaration does not match its files; correct declaredModels.") }
     }
+case "perf":
+    // Running llama-server instances, by URL (default llama-server's own 127.0.0.1:8080).
+    let urls = positional.dropFirst().map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
+    perf(urls.isEmpty ? ["http://127.0.0.1:8080"] : Array(urls))
 case "capabilities":
     print("Capabilities: declared in declaredModels, checked against each fetched model's files.")
     if !checkCapabilities(select(positional.dropFirst().first)) { fatal("a declaration does not match its files.") }

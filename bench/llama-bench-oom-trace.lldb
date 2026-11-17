@@ -1,0 +1,27 @@
+# Trace for the patched llama-bench (llama-bench-sqlite-store.patch on llama.cpp v0.9.0).
+# Plain lldb commands only. Each breakpoint prints where it is, what it is about to do,
+# and the free GPU memory CUDA reports (cudaMemGetInfo, in MiB), then continues.
+#   lldb-21 -b -s llama-bench-oom-trace.lldb -- <build-store>/bin/llama-bench <arguments>
+# For CUDA graphs off, add before `run`:  settings set target.env-vars GGML_CUDA_DISABLE_GRAPHS=1
+# Line numbers refer to the patched source tree.
+
+# The phases, in llama-bench.cpp: 2513 warmup generation; 2545 depth restored from the store;
+# 2560 depth computed (prefill); 2605 measured generation.
+breakpoint set --file llama-bench.cpp --line 2513 -G true -C "frame info" -C "expr -- size_t f_ = 0, t_ = 0; (void)cudaMemGetInfo(&f_, &t_); f_ / 1048576.0"
+breakpoint set --file llama-bench.cpp --line 2545 -G true -C "frame info" -C "expr -- size_t f_ = 0, t_ = 0; (void)cudaMemGetInfo(&f_, &t_); f_ / 1048576.0"
+breakpoint set --file llama-bench.cpp --line 2560 -G true -C "frame info" -C "expr -- size_t f_ = 0, t_ = 0; (void)cudaMemGetInfo(&f_, &t_); f_ / 1048576.0"
+breakpoint set --file llama-bench.cpp --line 2605 -G true -C "frame info" -C "expr -- size_t f_ = 0, t_ = 0; (void)cudaMemGetInfo(&f_, &t_); f_ / 1048576.0"
+
+# ggml-cuda.cu:631: the scratch pool asks the GPU for more memory (cuMemCreate).
+# size is the request; reserve_size is what the pool asks the GPU for; pool_size and pool_used are before it.
+breakpoint set --file ggml-cuda.cu --line 631 -G true -C "frame info" -C "frame variable size reserve_size this->pool_size this->pool_used" -C "expr -- size_t f_ = 0, t_ = 0; (void)cudaMemGetInfo(&f_, &t_); f_ / 1048576.0"
+
+# ggml-cuda.cu:3090 a new CUDA graph chunk is instantiated; 3064 one is re-instantiated; 3092 the chunk is ready.
+breakpoint set --file ggml-cuda.cu --line 3090 -G true -C "frame info" -C "frame variable idx" -C "expr -- size_t f_ = 0, t_ = 0; (void)cudaMemGetInfo(&f_, &t_); f_ / 1048576.0"
+breakpoint set --file ggml-cuda.cu --line 3064 -G true -C "frame info" -C "expr -- size_t f_ = 0, t_ = 0; (void)cudaMemGetInfo(&f_, &t_); f_ / 1048576.0"
+breakpoint set --file ggml-cuda.cu --line 3092 -G true -C "frame info" -C "frame variable idx" -C "expr -- size_t f_ = 0, t_ = 0; (void)cudaMemGetInfo(&f_, &t_); f_ / 1048576.0"
+
+# On the out-of-memory abort, stop and print the stack.
+process handle SIGABRT -s true -p false
+run
+bt 30

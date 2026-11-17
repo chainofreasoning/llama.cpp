@@ -160,6 +160,8 @@ If generation then runs out of memory while building CUDA graphs, turn them off:
 ## Benchmarks (optional)
 
 `bench/` measures both uses of a SQLite store. Building llama.cpp does not need it.
+[`bench/README.md`](bench/README.md) explains both uses, the lldb trace that found why the
+store removes the out-of-memory error, the tools, and the measured records.
 
 - **Use 1, speed and token reduction:** the store keeps what a model worked out, as
   text, and the harness gives the model those entries instead of the files and
@@ -191,6 +193,7 @@ bench/bench.swift run all depth                          # speed at 0, 8k, 32k a
 bench/bench.swift run gemma-4-31b state --store ~/llm-store/depth.sqlite     # use 2
 bench/bench.swift run qwen3.8-27b reuse                                       # use 1, no store
 bench/bench.swift run qwen3.8-27b reuse --store ~/llm-store/c++.sqlite        # use 1, cold; again: warm
+bench/bench.swift perf http://127.0.0.1:8080                                   # a running server's speed
 ```
 
 It runs `build/bin` by default; `--build <dir>` picks another build (for example
