@@ -9,6 +9,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "server-common.h"
+#include "server-store.h"
 
 #include <sstream>
 
@@ -1915,12 +1916,75 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         prompt = std::move(it_best->prompt);
 
         states.erase(it_best);
+
+        return true;
+    }
+
+    // nothing in RAM keeps more of the new prompt: look in the SQLite store
+    if (store) {
+        const auto c = store->find(tokens_new, f_keep_best, f_sim_best);
+        if (c.id >= 0) {
+            SRV_INF("store: restoring a stored prompt of %d tokens, lcp = %d, f_keep = %.3f, f_sim = %.3f\n",
+                    c.n_tokens, c.lcp, c.f_keep, c.f_sim);
+
+            const int64_t t_start = ggml_time_us();
+
+            server_prompt      stored_prompt;
+            server_prompt_data stored_data;
+            if (!store->load(c.id, tokens_new.has_mtmd, stored_prompt, stored_data)) {
+                SRV_WRN("%s", "store: could not read the stored state; computing the prompt instead\n");
+                return true;
+            }
+
+            {
+                const size_t size = stored_data.main.size();
+                const size_t n = llama_state_seq_set_data_ext(ctx_tgt, stored_data.main.data(), size, id_slot, 0);
+                if (n != size) {
+                    SRV_ERR("store: failed to restore state with size %zu\n", size);
+
+                    return false;
+                }
+            }
+
+            if (!stored_data.drft.empty()) {
+                if (!ctx_dft) {
+                    SRV_WRN("%s", "store: the stored state has a draft model's state and this server has none\n");
+
+                    return false;
+                }
+
+                const size_t size = stored_data.drft.size();
+                const size_t n = llama_state_seq_set_data_ext(ctx_dft, stored_data.drft.data(), size, id_slot, 0);
+                if (n != size) {
+                    SRV_WRN("store: failed to restore draft state with size %zu\n", size);
+
+                    return false;
+                }
+            }
+
+            SRV_INF("store: restored %d tokens, %.1f MiB, from %s (%.2f s), not computed\n",
+                    c.n_tokens, stored_data.size() / (1024.0 * 1024.0), store->path.c_str(),
+                    (ggml_time_us() - t_start) / 1e6);
+
+            prompt = std::move(stored_prompt);
+        }
     }
 
     return true;
 }
 
 void server_prompt_cache::update() {
+    // write through: every state saved to RAM goes to the SQLite store as well, before
+    // RAM evicts anything, so an evicted state stays restorable
+    if (store) {
+        for (auto & state : states) {
+            if (!state.stored) {
+                store->save(state);
+                state.stored = true;
+            }
+        }
+    }
+
     if (limit_size > 0) {
         while (!states.empty() && size() > limit_size) {
             SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));

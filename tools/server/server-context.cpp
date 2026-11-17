@@ -7,6 +7,7 @@
 #include "server-decision.h"
 #include "server-http.h"
 #include "server-task.h"
+#include "server-store.h"
 #include "server-queue.h"
 #include "server-realtime.h"
 #include "server-schema.h"
@@ -1114,6 +1115,9 @@ private:
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
+    // the SQLite tier under the prompt cache (--cache-store), or nullptr
+    std::unique_ptr<server_state_store> state_store;
+
     server_metrics metrics;
 
     // queued prompt stats - llama_decode() is async, so the timing is only valid after a sync
@@ -1136,6 +1140,16 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        // the SQLite store: save what each slot holds before the contexts go, so a
+        // server stopped while idle keeps its states for the next start
+        if (prompt_cache && prompt_cache->store && ctx_tgt) {
+            for (auto & slot : slots) {
+                if (slot.prompt.n_tokens() > 0 && slot.prompt_save(*prompt_cache)) {
+                    prompt_cache->update();
+                }
+            }
+        }
+
         spec.reset();
         spec_init.reset();
 
@@ -1603,8 +1617,26 @@ private:
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+
+            if (!params_base.cache_store.empty()) {
+                state_store = std::make_unique<server_state_store>(params_base.cache_store, params_base.cache_store_mib);
+                if (state_store->ok()) {
+                    state_store->set_key(params_base.model.path, params_base.cache_type_k, params_base.cache_type_v,
+                                         params_base.flash_attn_type, llama_build_info());
+                }
+                if (state_store->ok()) {
+                    prompt_cache->store = state_store.get();
+                } else {
+                    SRV_ERR("store: %s cannot be used; running without it\n", params_base.cache_store.c_str());
+                    state_store.reset();
+                }
+            }
         } else {
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+            if (!params_base.cache_store.empty()) {
+                SRV_WRN("store: --cache-store needs the prompt cache (--cache-ram not 0); running without %s\n",
+                        params_base.cache_store.c_str());
+            }
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 

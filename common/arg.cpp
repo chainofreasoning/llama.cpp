@@ -1693,6 +1693,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--cache-store"}, "PATH",
+        "SQLite file kept under the prompt cache: cached prompt states are written to it and restored from it "
+        "across restarts, instead of being computed again (needs --cache-ram not 0; default: none)",
+        [](common_params & params, const std::string & value) {
+            params.cache_store = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_STORE").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--cache-store-mib"}, "N",
+        string_format("size limit of --cache-store in MiB; over it, the least recently used states are removed "
+            "(default: %d, 0 = no limit)", params.cache_store_mib),
+        [](common_params & params, int value) {
+            params.cache_store_mib = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_STORE_MIB").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",

@@ -717,9 +717,14 @@ struct server_prompt_data {
     }
 };
 
+struct server_state_store; // server-store.h: the SQLite tier under the prompt cache
+
 struct server_prompt_cache_state {
     server_prompt prompt;
     server_prompt_data data;
+
+    // written to the SQLite store (--cache-store)
+    bool stored = false;
 
     size_t size() const {
         size_t res = data.size();
@@ -739,6 +744,10 @@ struct server_prompt_cache {
     }
 
     std::list<server_prompt_cache_state> states;
+
+    // the SQLite tier (--cache-store), or nullptr: states are written through to it,
+    // and a prompt is restored from it when nothing in RAM matches better
+    server_state_store * store = nullptr;
 
     // in bytes, 0 = no limit
     size_t limit_size = 0;
